@@ -22,6 +22,7 @@ import (
 	"golang.org/x/net/proxy"
 	"strconv"
 	"time"
+	"sync"
 )
 
 // LogFileName - the filename of the log residing in `StateDir`.
@@ -153,6 +154,9 @@ type Controller struct {
 	hysteria2Port         int
 }
 
+// transportInitOnce - enforce one-time PT's transport initialization in case of multiple controllers 
+var transportInitOnce sync.Once
+
 // NewController - Create a new Controller object.
 //
 // @param enableLogging Log to StateDir/ipt.log.
@@ -194,8 +198,12 @@ func NewController(stateDir string, enableLogging, unsafeLogging bool, logLevel 
 		ptlog.Warnf("Failed to set log level: %s", err.Error())
 	}
 
-	if err := transports.Init(); err != nil {
-		ptlog.Warnf("Failed to initialize transports: %s", err.Error())
+	var initErr error
+	transportInitOnce.Do(func() {
+		initErr = transports.Init()
+	})
+	if initErr != nil {
+		ptlog.Warnf("Failed to initialize transports: %s", initErr.Error())
 		return nil
 	}
 
