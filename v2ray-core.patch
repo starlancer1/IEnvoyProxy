@@ -383,3 +383,45 @@ index 5357971b..1e942d82 100644
  	}
  	uri := protocol + "://" + host + wsSettings.GetNormalizedPath()
  
+diff --git a/app/tun/packetparse/udp.go b/app/tun/packetparse/udp.go
+index 12345678..87654321 100644
+--- a/app/tun/packetparse/udp.go
++++ b/app/tun/packetparse/udp.go
+@@ -1,3 +1,6 @@
++//go:build with_packetparse
++// +build with_packetparse
++
+ package packetparse
+ 
+ import (
+diff --git a/app/tun/packetparse/udp_stub.go b/app/tun/packetparse/udp_stub.go
+new file mode 100644
+index 00000000..c8f7b0a2
+--- /dev/null
++++ b/app/tun/packetparse/udp_stub.go
+@@ -0,0 +1,25 @@
++//go:build !with_packetparse
++// +build !with_packetparse
++
++package packetparse
++
++import (
++	"github.com/v2fly/v2ray-core/v5/common/net"
++)
++
++var (
++	errNotIPPacket  = newError("not an IP packet")
++	errNotUDPPacket = newError("not a UDP packet")
++)
++
++var nullDestination = net.UnixDestination(net.DomainAddress("null"))
++
++// TryParseAsUDPPacket provides a stub implementation when packet parsing is disabled
++func TryParseAsUDPPacket(packet []byte) (src, dst net.Destination, data []byte, err error) {
++	return nullDestination, nullDestination, nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
++}
++
++// TryConstructUDPPacket provides a stub implementation when packet parsing is disabled
++func TryConstructUDPPacket(src, dst net.Destination, data []byte) ([]byte, error) {
++	return nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
++}
