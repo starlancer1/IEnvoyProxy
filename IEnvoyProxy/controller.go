@@ -83,6 +83,17 @@ var (
 	transportsInitOnce sync.Once
 )
 
+// Hysteria2QUICConfig - QUIC configuration for Hysteria2
+type Hysteria2QUICConfig struct {
+	InitStreamReceiveWindow     uint64        `yaml:"initStreamReceiveWindow,omitempty"`
+	MaxStreamReceiveWindow      uint64        `yaml:"maxStreamReceiveWindow,omitempty"`
+	InitConnectionReceiveWindow uint64        `yaml:"initConnReceiveWindow,omitempty"`
+	MaxConnectionReceiveWindow  uint64        `yaml:"maxConnReceiveWindow,omitempty"`
+	MaxIdleTimeout              time.Duration `yaml:"maxIdleTimeout,omitempty"`
+	KeepAlivePeriod             time.Duration `yaml:"keepAlivePeriod,omitempty"`
+	DisablePathMTUDiscovery     bool          `yaml:"disablePathMTUDiscovery,omitempty"`
+}
+
 // OnTransportStopped - Interface to get notified when a transport stopped again.
 type OnTransportStopped interface {
 	Stopped(name string, error error)
@@ -146,6 +157,15 @@ type Controller struct {
 
 	// Hysteria2Server - A Hysteria2 server URL https://v2.hysteria.network/docs/developers/URI-Scheme/
 	Hysteria2Server string
+
+	// Hysteria2QUICConfig - Optional QUIC configuration for Hysteria2
+	Hysteria2QUICConfig *Hysteria2QUICConfig
+
+	// Hysteria2BandwidthUp - Upload bandwidth limit for Hysteria2
+	Hysteria2BandwidthUp string
+
+	// Hysteria2BandwidthDown - Download bandwidth limit for Hysteria2
+	Hysteria2BandwidthDown string
 
 	stateDir         string
 	transportStopped OnTransportStopped
@@ -583,10 +603,49 @@ func (c *Controller) Start(methodName string, proxy string) error {
 
 			configFile := fmt.Sprintf("%s/hysteria.yaml", c.stateDir)
 
-			err = os.WriteFile(configFile,
-				[]byte(fmt.Sprintf("server: %s\n\nsocks5:\n  listen: 127.0.0.1:%d\n", c.Hysteria2Server, c.hysteria2Port)),
-				0644)
+			// Build complete configuration
+			fullConfig := fmt.Sprintf("server: %s\n\nsocks5:\n  listen: 127.0.0.1:%d\n", c.Hysteria2Server, c.hysteria2Port)
 
+			// Add bandwidth configuration if provided
+			if c.Hysteria2BandwidthUp != "" || c.Hysteria2BandwidthDown != "" {
+				fullConfig += "\nbandwidth:\n"
+				if c.Hysteria2BandwidthUp != "" {
+					fullConfig += fmt.Sprintf("  up: %s\n", c.Hysteria2BandwidthUp)
+				}
+				if c.Hysteria2BandwidthDown != "" {
+					fullConfig += fmt.Sprintf("  down: %s\n", c.Hysteria2BandwidthDown)
+				}
+			}
+
+			// Add QUIC configuration if provided
+			if c.Hysteria2QUICConfig != nil {
+				fullConfig += "\nquic:\n"
+
+				if c.Hysteria2QUICConfig.InitStreamReceiveWindow > 0 {
+					fullConfig += fmt.Sprintf("  initStreamReceiveWindow: %d\n", c.Hysteria2QUICConfig.InitStreamReceiveWindow)
+				}
+				if c.Hysteria2QUICConfig.MaxStreamReceiveWindow > 0 {
+					fullConfig += fmt.Sprintf("  maxStreamReceiveWindow: %d\n", c.Hysteria2QUICConfig.MaxStreamReceiveWindow)
+				}
+				if c.Hysteria2QUICConfig.InitConnectionReceiveWindow > 0 {
+					fullConfig += fmt.Sprintf("  initConnReceiveWindow: %d\n", c.Hysteria2QUICConfig.InitConnectionReceiveWindow)
+				}
+				if c.Hysteria2QUICConfig.MaxConnectionReceiveWindow > 0 {
+					fullConfig += fmt.Sprintf("  maxConnReceiveWindow: %d\n", c.Hysteria2QUICConfig.MaxConnectionReceiveWindow)
+				}
+				if c.Hysteria2QUICConfig.MaxIdleTimeout > 0 {
+					fullConfig += fmt.Sprintf("  maxIdleTimeout: %s\n", c.Hysteria2QUICConfig.MaxIdleTimeout)
+				}
+				if c.Hysteria2QUICConfig.KeepAlivePeriod > 0 {
+					fullConfig += fmt.Sprintf("  keepAlivePeriod: %s\n", c.Hysteria2QUICConfig.KeepAlivePeriod)
+				}
+				if c.Hysteria2QUICConfig.DisablePathMTUDiscovery {
+					fullConfig += "  disablePathMTUDiscovery: true\n"
+				}
+			}
+
+			// Write complete configuration to file once
+			err = os.WriteFile(configFile, []byte(fullConfig), 0644)
 			if err != nil {
 				ptlog.Errorf("Could not write config file: %s\n", err.Error())
 				return err
