@@ -1,6 +1,48 @@
+diff --git a/app/tun/packetparse/udp.go b/app/tun/packetparse/udp.go
+index 8e5cdd1..4f3f258 100644
+--- a/app/tun/packetparse/udp.go
++++ b/app/tun/packetparse/udp.go
+@@ -1,3 +1,6 @@
++//go:build with_packetparse
++// +build with_packetparse
++
+ package packetparse
+ 
+ import (
+diff --git a/app/tun/packetparse/udp_stub.go b/app/tun/packetparse/udp_stub.go
+new file mode 100644
+index 0000000..d8677a3
+--- /dev/null
++++ b/app/tun/packetparse/udp_stub.go
+@@ -0,0 +1,25 @@
++//go:build !with_packetparse
++// +build !with_packetparse
++
++package packetparse
++
++import (
++	"github.com/v2fly/v2ray-core/v5/common/net"
++)
++
++var (
++	errNotIPPacket  = newError("not an IP packet")
++	errNotUDPPacket = newError("not a UDP packet")
++)
++
++var nullDestination = net.UnixDestination(net.DomainAddress("null"))
++
++// TryParseAsUDPPacket provides a stub implementation when packet parsing is disabled
++func TryParseAsUDPPacket(packet []byte) (src, dst net.Destination, data []byte, err error) {
++	return nullDestination, nullDestination, nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
++}
++
++// TryConstructUDPPacket provides a stub implementation when packet parsing is disabled
++func TryConstructUDPPacket(src, dst net.Destination, data []byte) ([]byte, error) {
++	return nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
++}
 diff --git a/domain2ip.go b/domain2ip.go
 new file mode 100644
-index 00000000..da1ad5c6
+index 0000000..da1ad5c
 --- /dev/null
 +++ b/domain2ip.go
 @@ -0,0 +1,40 @@
@@ -46,10 +88,10 @@ index 00000000..da1ad5c6
 +}
 diff --git a/envoy/v2ray.go b/envoy/v2ray.go
 new file mode 100644
-index 0000000..bd787bf
+index 0000000..a172d49
 --- /dev/null
 +++ b/envoy/v2ray.go
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,410 @@
 +package v2ray
 +
 +// copied and modified from main/commands/run.go
@@ -81,6 +123,7 @@ index 0000000..bd787bf
 +)
 +
 +var osWsSignals = make(chan os.Signal, 1)
++var osHttpSignals = make(chan os.Signal, 1)
 +var osWechatSignals = make(chan os.Signal, 1)
 +var osSrtpSignals = make(chan os.Signal, 1)
 +
@@ -102,7 +145,7 @@ index 0000000..bd787bf
 +      }`, clientPort)
 +}
 +
-+func getWsConfig(clientPort int, serverAddress, serverWsPort, wsPath, id string, allowInsecure bool, serverName string) string {
++func getWsConfig(clientPort int, serverAddress, serverWsPort, wsPath, id string, allowInsecure bool, serverName string, hostName string) string {
 +	return fmt.Sprintf(`
 +  {
 +    "log": {
@@ -135,12 +178,58 @@ index 0000000..bd787bf
 +            "serverName": "%s"
 +          },
 +          "wsSettings": {
-+            "path": "%s"
++            "path": "%s",
++            "headers": {
++              "Host": "%s"
++            }
 +          }
 +        }
 +      }
 +    ]
-+  }`, getInbound(clientPort), serverAddress, serverWsPort, id, allowInsecure, serverName, wsPath)
++  }`, getInbound(clientPort), serverAddress, serverWsPort, id, allowInsecure, serverName, wsPath, hostName)
++}
++
++func getHttpConfig(clientPort int, serverAddress, serverHttpPort, httpPath, id string, allowInsecure bool, serverName string, hostName string) string {
++	return fmt.Sprintf(`
++  {
++    "log": {
++      "loglevel": "error"
++    },
++    "inbounds": [%s
++    ],
++    "outbounds": [
++      {
++        "protocol": "vmess",
++        "settings": {
++          "vnext": [
++            {
++              "address": "%s",
++              "port": %s,
++              "users": [
++                {
++                  "id": "%s",
++                  "alterId": 0
++                }
++              ]
++            }
++          ]
++        },
++        "streamSettings": {
++          "network": "http",
++          "security": "tls",
++          "tlsSettings": {
++            "allowInsecure": %t,
++            "serverName": "%s"
++          },
++          "httpSettings": {
++            "path": "%s",
++            "host": ["%s"],
++            "method": "POST"
++          }
++        }
++      }
++    ]
++  }`, getInbound(clientPort), serverAddress, serverHttpPort, id, allowInsecure, serverName, httpPath, hostName)
 +}
 +
 +// getQUICConfig
@@ -222,6 +311,14 @@ index 0000000..bd787bf
 +type WsConfigOptional struct {
 +	AllowInsecure bool
 +	ServerName    string
++	Hostname      string
++}
++
++// HttpConfigOptional - optional configuration for HTTP/2 transport
++type HttpConfigOptional struct {
++	AllowInsecure bool
++	ServerName    string
++	Hostname      string
 +}
 +
 +// StartWs - start v2ray, websocket transport
@@ -243,6 +340,7 @@ index 0000000..bd787bf
 +	// Set defaults for optional config
 +	allowInsecure := false
 +	serverName := serverAddress
++	hostName := serverAddress
 +
 +	// Override with provided config if any
 +	if len(config) > 0 {
@@ -251,9 +349,12 @@ index 0000000..bd787bf
 +		if cfg.ServerName != "" {
 +			serverName = cfg.ServerName
 +		}
++		if cfg.Hostname != "" {
++			hostName = cfg.Hostname
++		}
 +	}
 +
-+	server, err := startServer(getWsConfig(clientPort, serverAddress, serverPort, wsPath, id, allowInsecure, serverName))
++	server, err := startServer(getWsConfig(clientPort, serverAddress, serverPort, wsPath, id, allowInsecure, serverName, hostName))
 +	if err != nil {
 +		return err
 +	}
@@ -274,6 +375,62 @@ index 0000000..bd787bf
 +
 +func StopWs() {
 +	osWsSignals <- syscall.SIGTERM
++}
++
++// StartHttp - start v2ray, HTTP/2 transport
++//
++// @param clientPort - client SOCKS port routed to the HTTP/2 server
++//
++// @param serverAddress - IP or hostname of the server
++//
++// @param serverPort - port of the HTTP/2 server (probably 443)
++//
++// @param httpPath - path to the HTTP/2 endpoint on the server
++//
++// @param id - UUID used to authenticate with the server
++//
++// @param config - optional configuration (allowInsecure defaults to false, serverName defaults to serverAddress)
++//
++// @returns error, if transport could not be started, or `nil` on success.
++func StartHttp(clientPort int, serverAddress, serverPort, httpPath, id string, config ...HttpConfigOptional) error {
++	// Set defaults for optional config
++	allowInsecure := false
++	serverName := serverAddress
++	hostName := serverAddress
++
++	// Override with provided config if any
++	if len(config) > 0 {
++		cfg := config[0]
++		allowInsecure = cfg.AllowInsecure
++		if cfg.ServerName != "" {
++			serverName = cfg.ServerName
++		}
++		if cfg.Hostname != "" {
++			hostName = cfg.Hostname
++		}
++	}
++
++	server, err := startServer(getHttpConfig(clientPort, serverAddress, serverPort, httpPath, id, allowInsecure, serverName, hostName))
++	if err != nil {
++		return err
++	}
++
++	go func(server *core.Instance) {
++		defer func(server *core.Instance) {
++			_ = server.Close()
++		}(server)
++
++		{
++			signal.Notify(osHttpSignals, syscall.SIGTERM)
++			<-osHttpSignals
++		}
++	}(server)
++
++	return nil
++}
++
++func StopHttp() {
++	osHttpSignals <- syscall.SIGTERM
 +}
 +
 +// StartSrtp - start v2ray, QUIC/SRTP transport
@@ -345,23 +502,70 @@ index 0000000..bd787bf
 +func StopWechat() {
 +	osWechatSignals <- syscall.SIGTERM
 +}
+diff --git a/transport/internet/http/dialer.go b/transport/internet/http/dialer.go
+index 8a9da0e..c957e40 100644
+--- a/transport/internet/http/dialer.go
++++ b/transport/internet/http/dialer.go
+@@ -59,6 +59,23 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se
+ 			}
+ 			address := net.ParseAddress(rawHost)
+ 
++			// // Store original domain before potentially replacing with IP
++			// originalDomain := rawHost
++			// if ips, ok := core.GetDomainIPs(originalDomain); ok {
++			// 	address = net.ParseAddress(ips[0])
++			// }
++			// Only try to resolve using GetDomainIPs if the address is a domain, not an IP
++			var originalDomain string
++			if address.Family().IsDomain() {
++				originalDomain = rawHost
++				if ips, ok := core.GetDomainIPs(originalDomain); ok {
++					address = net.ParseAddress(ips[0])
++				}
++			} else {
++				originalDomain = address.String()
++			}
++			// fmt.Printf("http2.Transport DialTLSContext to resolved address: %s\n", address)
++
+ 			detachedContext := core.ToBackgroundDetachedContext(ctx)
+ 			pconn, err := internet.DialSystem(detachedContext, net.TCPDestination(address, port), streamSettings.SocketSettings)
+ 			if err != nil {
+@@ -66,7 +83,11 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se
+ 			}
+ 
+ 			cn, err := (*securityEngine).Client(pconn,
+-				security.OptionWithDestination{Dest: dest})
++				security.OptionWithDestination{Dest: net.Destination{
++					Network: dest.Network,
++					Address: net.ParseAddress(originalDomain),
++					Port:    dest.Port,
++				}})
+ 			if err != nil {
+ 				return nil, err
+ 			}
 diff --git a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
-index 5357971b..1e942d82 100644
+index 3fb229f..9f7b204 100644
 --- a/transport/internet/websocket/dialer.go
 +++ b/transport/internet/websocket/dialer.go
-@@ -38,6 +38,11 @@ func init() {
+@@ -38,6 +38,17 @@ func init() {
  func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (net.Conn, error) {
  	wsSettings := streamSettings.ProtocolSettings.(*Config)
  
-+	originalDomain := dest.Address.Domain()
-+	if ips, ok := core.GetDomainIPs(originalDomain); ok {
-+		dest.Address = net.ParseAddress(ips[0])
++	// Only try to resolve using GetDomainIPs if the address is a domain, not an IP
++	var originalDomain string
++	if dest.Address.Family().IsDomain() {
++		originalDomain = dest.Address.Domain()
++		if ips, ok := core.GetDomainIPs(originalDomain); ok {
++			dest.Address = net.ParseAddress(ips[0])
++		}
++	} else {
++		originalDomain = dest.Address.String()
 +	}
 +
  	dialer := &websocket.Dialer{
  		NetDial: func(network, addr string) (net.Conn, error) {
  			return internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
-@@ -63,7 +68,11 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
+@@ -63,7 +74,11 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
  				return nil, newError("dial TLS connection failed").Base(err)
  			}
  			conn, err = securityEngine.Client(conn,
@@ -374,7 +578,7 @@ index 5357971b..1e942d82 100644
  				security.OptionWithALPN{ALPNs: []string{"http/1.1"}})
  			if err != nil {
  				return nil, newError("unable to create security protocol client from security engine").Base(err)
-@@ -74,7 +83,7 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
+@@ -74,7 +89,7 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
  
  	host := dest.NetAddr()
  	if (protocol == "ws" && dest.Port == 80) || (protocol == "wss" && dest.Port == 443) {
@@ -383,45 +587,3 @@ index 5357971b..1e942d82 100644
  	}
  	uri := protocol + "://" + host + wsSettings.GetNormalizedPath()
  
-diff --git a/app/tun/packetparse/udp.go b/app/tun/packetparse/udp.go
-index 12345678..87654321 100644
---- a/app/tun/packetparse/udp.go
-+++ b/app/tun/packetparse/udp.go
-@@ -1,3 +1,6 @@
-+//go:build with_packetparse
-+// +build with_packetparse
-+
- package packetparse
- 
- import (
-diff --git a/app/tun/packetparse/udp_stub.go b/app/tun/packetparse/udp_stub.go
-new file mode 100644
-index 00000000..c8f7b0a2
---- /dev/null
-+++ b/app/tun/packetparse/udp_stub.go
-@@ -0,0 +1,25 @@
-+//go:build !with_packetparse
-+// +build !with_packetparse
-+
-+package packetparse
-+
-+import (
-+	"github.com/v2fly/v2ray-core/v5/common/net"
-+)
-+
-+var (
-+	errNotIPPacket  = newError("not an IP packet")
-+	errNotUDPPacket = newError("not a UDP packet")
-+)
-+
-+var nullDestination = net.UnixDestination(net.DomainAddress("null"))
-+
-+// TryParseAsUDPPacket provides a stub implementation when packet parsing is disabled
-+func TryParseAsUDPPacket(packet []byte) (src, dst net.Destination, data []byte, err error) {
-+	return nullDestination, nullDestination, nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
-+}
-+
-+// TryConstructUDPPacket provides a stub implementation when packet parsing is disabled
-+func TryConstructUDPPacket(src, dst net.Destination, data []byte) ([]byte, error) {
-+	return nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
-+}
