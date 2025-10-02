@@ -59,7 +59,7 @@ index 521d0d1..718ed0e 100644
 +					}
  				}
  			}
- 
+
 diff --git a/domain2ip.go b/domain2ip.go
 new file mode 100644
 index 0000000..da1ad5c
