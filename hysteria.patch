@@ -406,6 +406,65 @@ index 0fc7de6..7a00aec 100644
  func (s *Server) dispatch(conn net.Conn) {
  	ok, _ := s.negotiate(conn)
  	if !ok {
+diff --git a/app/internal/tun/server.go b/app/internal/tun/server.go
+index a999051..76e9c8c 100644
+--- a/app/internal/tun/server.go
++++ b/app/internal/tun/server.go
+@@ -217,6 +217,10 @@ type interfaceFinder struct{}
+ 
+ var _ control.InterfaceFinder = (*interfaceFinder)(nil)
+ 
++func (f *interfaceFinder) Update() error {
++	return nil
++}
++
+ func (f *interfaceFinder) InterfaceIndexByName(name string) (int, error) {
+ 	ifce, err := net.InterfaceByName(name)
+ 	if err != nil {
+@@ -225,6 +229,43 @@ func (f *interfaceFinder) InterfaceIndexByName(name string) (int, error) {
+ 	return ifce.Index, nil
+ }
+ 
++func (f *interfaceFinder) InterfaceByAddr(addr netip.Addr) (*control.Interface, error) {
++	ifces, err := net.Interfaces()
++	if err != nil {
++		return nil, err
++	}
++	for _, ifce := range ifces {
++		addrs, err := ifce.Addrs()
++		if err != nil {
++			continue
++		}
++		for _, a := range addrs {
++			if ip, ok := a.(*net.IPNet); ok && ip.IP.Equal(addr.AsSlice()) {
++				return &control.Interface{
++					Index: ifce.Index,
++					Name:  ifce.Name,
++				}, nil
++			}
++		}
++	}
++	return nil, fmt.Errorf("no interface found for address %s", addr)
++}
++
++func (f *interfaceFinder) Interfaces() []control.Interface {
++	ifces, err := net.Interfaces()
++	if err != nil {
++		return nil
++	}
++	result := make([]control.Interface, len(ifces))
++	for i, ifce := range ifces {
++		result[i] = control.Interface{
++			Index: ifce.Index,
++			Name:  ifce.Name,
++		}
++	}
++	return result
++}
++
+ func (f *interfaceFinder) InterfaceNameByIndex(index int) (string, error) {
+ 	ifce, err := net.InterfaceByIndex(index)
+ 	if err != nil {
 diff --git a/app/main.go b/app/main.go
 index 81d8168..5276507 100644
 --- a/app/main.go

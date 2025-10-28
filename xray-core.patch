@@ -1,0 +1,204 @@
+diff -Naur a/envoy/xray.go b/envoy/xray.go
+--- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
++++ b/envoy/xray.go	2025-10-16 23:10:40.558662246 +0000
+@@ -0,0 +1,188 @@
++package xray
++
++// copied and modified from main/commands/run.go
++
++// feeding core.LoadConfig with a string reader containing the config
++// JSON seems the simplest way to run xray as a library
++//
++// Golang's JSON support seems a little cumbersome for a couple
++// string substitutions in a complex JSON snippet, so we just
++// use fmt.Sprintf to assemble the config
++//
++// The JSON file we build should look similar to the client example config
++// (that will be) documented here:
++// https://gitlab.com/stevenmcdonald/envoy-proxy-examples/v2ray/
++
++// We provide functions for starting and stopping several client services
++// independently. Unfortunately you can't start them all and tell xray to
++// use the one that works... but that's what Envoy is good at.
++
++import (
++	"fmt"
++	"os"
++	"os/signal"
++	"strings"
++	"syscall"
++
++	core "github.com/xtls/xray-core/core"
++	_ "github.com/xtls/xray-core/main/distro/all"
++)
++
++const jsonV5 = "json"
++
++var osXrxhSignals = make(chan os.Signal, 1)
++
++// getInbound
++//
++// @param port - port to listen for SOCKS5 connections
++func getInbound(clientPort int) string {
++	return fmt.Sprintf(`
++      {
++        "port": %d,
++        "protocol": "socks",
++        "sniffing": {
++          "enabled": true,
++          "destOverride": ["http", "tls"]
++        },
++        "settings": {}
++      }`, clientPort)
++}
++
++func getXrxhConfig(clientPort int, serverAddress, serverPort, xhttpPath, id string, allowInsecure bool, serverName string, hostName string, xhttpMode string) string {
++	return fmt.Sprintf(`
++  {
++    "log": {
++      "loglevel": "warning"
++    },
++    "inbounds": [%s
++    ],
++    "outbounds": [
++      {
++        "protocol": "vless",
++        "settings": {
++          "vnext": [
++            {
++              "address": "%s",
++              "port": %s,
++              "users": [
++                {
++                  "id": "%s",
++                  "encryption": "none"
++                }
++              ]
++            }
++          ]
++        },
++        "streamSettings": {
++          "network": "xhttp",
++          "xhttpSettings": {
++            "path": "%s",
++            "mode": "%s"
++          },
++          "security": "tls",
++          "tlsSettings": {
++            "serverName": "%s",
++            "allowInsecure": %t,
++            "alpn": ["h2", "http/1.1"]
++          }
++        }
++      }
++    ]
++  }`, getInbound(clientPort), serverAddress, serverPort, id, xhttpPath, xhttpMode, serverName, allowInsecure)
++}
++
++func startServer(jsonConfig string) (*core.Instance, error) {
++	fmt.Printf("DEBUG: Xray JSON config:\n%s\n", jsonConfig)
++	reader := strings.NewReader(jsonConfig)
++
++	config, err := core.LoadConfig(jsonV5, reader)
++	if err != nil {
++		fmt.Printf("error reading config: %s\n", err)
++		return nil, err
++	}
++
++	server, err := core.New(config)
++	if err != nil {
++		fmt.Printf("error creating server: %s\n", err)
++		return nil, err
++	}
++
++	if err := server.Start(); err != nil {
++		fmt.Printf("failed to start %s\n", err)
++
++		_ = server.Close()
++
++		return nil, err
++	}
++
++	return server, nil
++}
++
++// XrxhConfigOptional holds optional configuration for Xrxh connections
++type XrxhConfigOptional struct {
++	AllowInsecure bool
++	ServerName    string
++	Hostname      string
++	XhttpMode     string
++}
++
++// StartXrxh - start Xray with XHTTP transport
++//
++// @param clientPort - client SOCKS port routed to the XHTTP server
++//
++// @param serverAddress - IP or hostname of the server
++//
++// @param serverPort - port of the XHTTP server (probably 443)
++//
++// @param xhttpPath - path to the XHTTP endpoint on the server
++//
++// @param id - UUID used to authenticate with the server
++//
++// @param config - optional configuration (allowInsecure defaults to false,
++// serverName defaults to serverAddress, xhttpMode defaults to stream-one)
++//
++// @returns error, if transport could not be started, or `nil` on success.
++func StartXrxh(clientPort int, serverAddress, serverPort, xhttpPath, id string, config ...XrxhConfigOptional) error {
++	// Set defaults for optional config
++	allowInsecure := false
++	serverName := serverAddress
++	hostName := serverAddress
++	xhttpMode := "stream-one"
++
++	// Override with provided config if any
++	if len(config) > 0 {
++		cfg := config[0]
++		allowInsecure = cfg.AllowInsecure
++		if cfg.ServerName != "" {
++			serverName = cfg.ServerName
++		}
++		if cfg.Hostname != "" {
++			hostName = cfg.Hostname
++		}
++		if cfg.XhttpMode != "" {
++			xhttpMode = cfg.XhttpMode
++		}
++	}
++
++	server, err := startServer(getXrxhConfig(clientPort, serverAddress, serverPort, xhttpPath, id, allowInsecure, serverName, hostName, xhttpMode))
++	if err != nil {
++		return err
++	}
++
++	go func(server *core.Instance) {
++		defer func(server *core.Instance) {
++			_ = server.Close()
++		}(server)
++
++		{
++			signal.Notify(osXrxhSignals, syscall.SIGTERM)
++			<-osXrxhSignals
++		}
++	}(server)
++
++	return nil
++}
++
++func StopXrxh() {
++	osXrxhSignals <- syscall.SIGTERM
++}
+diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
+--- a/proxy/wireguard/tun.go	2025-10-14 20:23:35.482996098 +0000
++++ b/proxy/wireguard/tun.go	2025-10-14 22:51:37.019889290 +0000
+@@ -194,7 +194,7 @@
+ 					Timeout: 15 * time.Second,
+ 				})
+ 
+-				handler(xnet.UDPDestination(xnet.IPAddress(id.LocalAddress.AsSlice()), xnet.Port(id.LocalPort)), gonet.NewUDPConn(&wq, ep))
++				handler(xnet.UDPDestination(xnet.IPAddress(id.LocalAddress.AsSlice()), xnet.Port(id.LocalPort)), gonet.NewUDPConn(stack, &wq, ep))
+ 			}(r)
+ 		})
+ 		stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
