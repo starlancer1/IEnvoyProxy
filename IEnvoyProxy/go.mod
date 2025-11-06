@@ -187,4 +187,5 @@ replace (
 	github.com/apernet/hysteria/extras/v2 => ../hysteria/extras
 	github.com/v2fly/v2ray-core/v5 => ../v2ray-core
 	github.com/xtls/xray-core => ../Xray-core
+	gvisor.dev/gvisor => gvisor.dev/gvisor v0.0.0-20231020174304-b8a429915ff1
 )

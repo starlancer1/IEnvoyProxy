@@ -151,7 +151,7 @@ Controller ptc = Controller(ptDir, true, false, "INFO");
 
 ### Requirements
 
-You'll need Go 1.23 as a prerequisite.
+You'll need Go 1.25 as a prerequisite.
 
 You will also need Xcode installed when compiling for iOS and an Android NDK
 when compiling for Android.
