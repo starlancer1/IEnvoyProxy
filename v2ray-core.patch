@@ -108,10 +108,10 @@ index 0000000..da1ad5c
 +}
 diff --git a/envoy/v2ray.go b/envoy/v2ray.go
 new file mode 100644
-index 0000000..878d6ab
+index 0000000..59befc3
 --- /dev/null
 +++ b/envoy/v2ray.go
-@@ -0,0 +1,416 @@
+@@ -0,0 +1,432 @@
 +package v2ray
 +
 +// copied and modified from main/commands/run.go
@@ -263,10 +263,24 @@ index 0000000..878d6ab
 +//
 +// @oaram type - type of QUIC obfuscation, should be "srtp" or "wechat-video"
 +func getQuicConfig(clientPort int, serverAddress, serverPort, quicType, id string) string {
++	// Determine the @type for the header based on quicType
++	var headerType string
++	switch quicType {
++	case "srtp":
++		headerType = "type.googleapis.com/v2ray.core.transport.internet.headers.srtp.Config"
++	case "wechat-video":
++		headerType = "type.googleapis.com/v2ray.core.transport.internet.headers.wechat.VideoConfig"
++	default:
++		headerType = "type.googleapis.com/v2ray.core.transport.internet.headers.noop.Config"
++	}
++
 +	return fmt.Sprintf(`
 +  {
 +    "log": {
-+      "loglevel": "error"
++      "error": {
++        "type": "Console",
++        "level": "Error"
++      }
 +    },
 +    "inbounds": [%s
 +    ],
@@ -281,16 +295,18 @@ index 0000000..878d6ab
 +        "streamSettings": {
 +          "transport": "quic",
 +          "transportSettings": {
-+            "security": "aes-128-gcm",
++            "security": {
++              "type": "AES128_GCM"
++            },
 +            "header": {
-+              "type": "%s"
++              "@type": "%s"
 +            },
 +            "key": "0"
 +          }
 +        }
 +      }
 +    ]
-+  }`, getInbound(clientPort), serverAddress, serverPort, id, quicType)
++  }`, getInbound(clientPort), serverAddress, serverPort, id, headerType)
 +}
 +
 +func startServer(jsonConfig string) (*core.Instance, error) {
