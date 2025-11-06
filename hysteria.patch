@@ -1,5 +1,5 @@
 diff --git a/app/cmd/client.go b/app/cmd/client.go
-index 65bc7e0..e731e83 100644
+index 65bc7e0..2563f7b 100644
 --- a/app/cmd/client.go
 +++ b/app/cmd/client.go
 @@ -14,6 +14,7 @@ import (
@@ -71,7 +71,7 @@ index 65bc7e0..e731e83 100644
 +	}
 +}
 +
-+func stopClientByPort(listenAddr string) {
++func stopClientByAddress(listenAddr string) {
 +	socks5ServerMutex.Lock()
 +	defer socks5ServerMutex.Unlock()
 +	if server, exists := socks5ServerInstances[listenAddr]; exists {
@@ -145,7 +145,7 @@ index db45052..ca802c1 100644
  	defer conn.Close()
  
 diff --git a/app/cmd/root.go b/app/cmd/root.go
-index 13f9705..b2c7024 100644
+index 13f9705..1176e72 100644
 --- a/app/cmd/root.go
 +++ b/app/cmd/root.go
 @@ -105,6 +105,25 @@ func Execute() {
@@ -167,8 +167,8 @@ index 13f9705..b2c7024 100644
 +	stopClient()
 +}
 +
-+func StopByPort(listenAddr string) {
-+	stopClientByPort(listenAddr)
++func StopByAddress(listenAddr string) {
++	stopClientByAddress(listenAddr)
 +}
 +
  func init() {
