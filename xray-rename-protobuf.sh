@@ -34,7 +34,8 @@ find . -name "*.proto" -type f | while read proto_file; do
     old_import=$(echo "$proto_file" | sed 's|^\./||')
     new_import=$(echo "$new_path" | sed 's|^\./||')
     
-    find . -name "*.proto" -type f -exec sed -i "s|import \"${old_import}\"|import \"${new_import}\"|g" {} \;
+    # Cross-platform sed: use -i.bak then remove backup files (works on both Linux and macOS)
+    find . -name "*.proto" -type f -exec sed -i.bak "s|import \"${old_import}\"|import \"${new_import}\"|g" {} \; -exec rm {}.bak \;
 done
 
 echo "Done renaming proto files"
