@@ -879,7 +879,7 @@ func (c *Controller) Stop(methodName string) {
 		if c.hysteria2Running {
 			ptlog.Noticef("Shutting down %s", methodName)
 			listenAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(c.hysteria2Port))
-			go hysteria2.StopByPort(listenAddr)
+			go hysteria2.StopByAddress(listenAddr)
 			_ = os.Remove(fmt.Sprintf("%s/hysteria.yaml", c.stateDir))
 			c.hysteria2Running = false
 		} else {
