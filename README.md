@@ -1,4 +1,4 @@
-# IEnovyProxy
+# IEnvoyProxy
 
 This is a fork of IPtProxy (https://github.com/tladesignz/IPtProxy) modified to include censorship evading proxies used by Envoy (https://github.com/greatfire/envoy)
 
@@ -7,6 +7,7 @@ currently this includes:
 * Lyrebird(https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird)
 * Snowflake(https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake)
 * [V2ray](https://github.com/v2fly/v2ray-core)
+* [XRay](https://github.com/XTLS/Xray-core)
 * [Hysteria2](https://github.com/apernet/hysteria.git)
 
 We have previously supported (available in git history):

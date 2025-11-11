@@ -9,6 +9,42 @@
 # exit on error
 set -e
 
+# Function to install protoc and plugins if missing
+install_protoc() {
+    # Ensure protoc is installed
+    if ! command -v protoc &>/dev/null; then
+        echo "Installing protoc..."
+        case "$(uname -s)" in
+            Darwin)
+                brew install protobuf || { echo "Error: Install Homebrew first"; exit 1; }
+                ;;
+            Linux)
+                sudo apt update && sudo apt install -y protobuf-compiler || { echo "Error: Failed to install protoc"; exit 1; }
+                ;;
+            *)
+                echo "Error: Unsupported OS. Install protoc from: https://github.com/protocolbuffers/protobuf/releases"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    # Install Go protoc plugins if missing
+    if ! command -v protoc-gen-go &>/dev/null; then
+        echo "Installing protoc-gen-go..."
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+    fi
+    
+    if ! command -v protoc-gen-go-grpc &>/dev/null; then
+        echo "Installing protoc-gen-go-grpc..."
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+    fi
+    
+    echo "✓ protoc ready (version: $(protoc --version | cut -d' ' -f2))"
+}
+
+# Install protoc and plugins if needed
+install_protoc
+
 echo "Renaming Xray protobuf files to avoid conflicts with V2Ray..."
 
 # Navigate to Xray-core directory
@@ -44,7 +80,7 @@ echo "Now regenerating all .pb.go files..."
 # Regenerate all protobuf files
 find . -name "xray_*.proto" -type f | while read proto_file; do
     echo "Generating: $proto_file"
-    protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. "$proto_file" 2>/dev/null || protoc --go_out=paths=source_relative:. "$proto_file"
+    protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. "$proto_file"
 done
 
 echo "Renaming .pb.go files back to original names..."
