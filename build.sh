@@ -57,11 +57,16 @@ if test -e ".git"; then
     git reset --hard
     git clean -fdx
     cp -a . "$TMPDIR/v2ray-core"
+    cd ../Xray-core || exit 1
+    git reset --hard
+    git clean -fd
+    cp -a . "$TMPDIR/Xray-core"
     cd ..
 else
     # No .git directory - That's a normal install.
     git clone --recursive --shallow-submodules --depth 1 --branch "401ed524" https://github.com/apernet/hysteria.git "$TMPDIR/hysteria"
     git clone --recursive --shallow-submodules --depth 1 --branch "28f55860" https://github.com/v2fly/v2ray-core.git "$TMPDIR/v2ray-core"
+    git clone --recursive --shallow-submodules --depth 1 --branch "dcfde8dc" https://github.com/XTLS/Xray-core.git "$TMPDIR/Xray-core"
 fi
 
 # Apply patches.
@@ -69,6 +74,10 @@ printf '\n\n--- Apply patches to submodules...\n'
 pwd
 patch --directory="$TMPDIR/hysteria" --strip=1 < hysteria.patch
 patch --directory="$TMPDIR/v2ray-core" --strip=1 < v2ray-core.patch
+patch --directory="$TMPDIR/Xray-core" --strip=1 < xray-core.patch
+
+# Rename Xray protobuf files to avoid conflicts with V2Ray
+TMPDIR="$TMPDIR" ./xray-rename-protobuf.sh
 
 # Compile framework.
 printf '\n\n--- Compile %s...\n' "$OUTPUT"
@@ -77,7 +86,7 @@ cd "$TMPDIR/IEnvoyProxy" || exit 1
 
 gomobile init
 
-MACOSX_DEPLOYMENT_TARGET=11.0 gomobile bind -target=$TARGET -ldflags="-s -w -checklinkname=0" -o "$CURRENT/$OUTPUT" -iosversion=12.0 -androidapi=21 -v -tags=netcgo -trimpath
+MACOSX_DEPLOYMENT_TARGET=11.0 GOFLAGS="-mod=mod" gomobile bind -target=$TARGET -ldflags="-s -w -checklinkname=0" -o "$CURRENT/$OUTPUT" -iosversion=12.0 -androidapi=21 -v -tags=netcgo -trimpath
 
 ### Note:
 # $ go tool link -h

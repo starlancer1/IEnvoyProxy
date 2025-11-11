@@ -1,12 +1,12 @@
 module IEnvoyProxy
 
-go 1.24
+go 1.25
 
-toolchain go1.24.3
+toolchain go1.25.3
 
 require (
 	github.com/apernet/hysteria/app/v2 v2.6.1
-	github.com/v2fly/v2ray-core/v5 v5.31.0
+	github.com/v2fly/v2ray-core/v5 v5.40.0
 	gitlab.com/stevenmcdonald/tubesocks v0.0.0-20220419205400-4305891e0caa
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib v1.6.0
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird v0.0.0-20250319164402-5e3f0aeb5008
@@ -186,4 +186,6 @@ replace (
 	github.com/apernet/hysteria/core/v2 => ../hysteria/core
 	github.com/apernet/hysteria/extras/v2 => ../hysteria/extras
 	github.com/v2fly/v2ray-core/v5 => ../v2ray-core
+	github.com/xtls/xray-core => ../Xray-core
+	gvisor.dev/gvisor => gvisor.dev/gvisor v0.0.0-20231020174304-b8a429915ff1
 )

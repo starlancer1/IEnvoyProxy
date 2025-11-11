@@ -40,6 +40,26 @@ index 0000000..d8677a3
 +func TryConstructUDPPacket(src, dst net.Destination, data []byte) ([]byte, error) {
 +	return nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
 +}
+diff --git a/common/protofilter/filter.go b/common/protofilter/filter.go
+index 521d0d1..718ed0e 100644
+--- a/common/protofilter/filter.go
++++ b/common/protofilter/filter.go
+@@ -39,9 +39,12 @@ func filterMessage(ctx context.Context, message protoreflect.Message) error {
+ 		v2extension, ferr := protoext.GetFieldOptions(descriptor)
+ 		if ferr == nil {
+ 			if v2extension.Forbidden {
+-				if value.Bool() {
+-					err = newError("a forbidden value is set ", descriptor.FullName())
+-					return false
++				// Skip forbidden check for allow_insecure field to restore functionality
++				if descriptor.FullName() != "v2ray.core.transport.internet.tls.Config.allow_insecure" {
++					if value.Bool() {
++						err = newError("a forbidden value is set ", descriptor.FullName())
++						return false
++					}
+ 				}
+ 			}
+ 
 diff --git a/domain2ip.go b/domain2ip.go
 new file mode 100644
 index 0000000..da1ad5c
@@ -88,10 +108,10 @@ index 0000000..da1ad5c
 +}
 diff --git a/envoy/v2ray.go b/envoy/v2ray.go
 new file mode 100644
-index 0000000..878d6ab
+index 0000000..59befc3
 --- /dev/null
 +++ b/envoy/v2ray.go
-@@ -0,0 +1,416 @@
+@@ -0,0 +1,432 @@
 +package v2ray
 +
 +// copied and modified from main/commands/run.go
@@ -243,10 +263,24 @@ index 0000000..878d6ab
 +//
 +// @oaram type - type of QUIC obfuscation, should be "srtp" or "wechat-video"
 +func getQuicConfig(clientPort int, serverAddress, serverPort, quicType, id string) string {
++	// Determine the @type for the header based on quicType
++	var headerType string
++	switch quicType {
++	case "srtp":
++		headerType = "type.googleapis.com/v2ray.core.transport.internet.headers.srtp.Config"
++	case "wechat-video":
++		headerType = "type.googleapis.com/v2ray.core.transport.internet.headers.wechat.VideoConfig"
++	default:
++		headerType = "type.googleapis.com/v2ray.core.transport.internet.headers.noop.Config"
++	}
++
 +	return fmt.Sprintf(`
 +  {
 +    "log": {
-+      "loglevel": "error"
++      "error": {
++        "type": "Console",
++        "level": "Error"
++      }
 +    },
 +    "inbounds": [%s
 +    ],
@@ -261,16 +295,18 @@ index 0000000..878d6ab
 +        "streamSettings": {
 +          "transport": "quic",
 +          "transportSettings": {
-+            "security": "aes-128-gcm",
++            "security": {
++              "type": "AES128_GCM"
++            },
 +            "header": {
-+              "type": "%s"
++              "@type": "%s"
 +            },
 +            "key": "0"
 +          }
 +        }
 +      }
 +    ]
-+  }`, getInbound(clientPort), serverAddress, serverPort, id, quicType)
++  }`, getInbound(clientPort), serverAddress, serverPort, id, headerType)
 +}
 +
 +func startServer(jsonConfig string) (*core.Instance, error) {

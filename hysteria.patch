@@ -1,24 +1,34 @@
 diff --git a/app/cmd/client.go b/app/cmd/client.go
-index 65bc7e0..450ab6c 100644
+index 65bc7e0..2563f7b 100644
 --- a/app/cmd/client.go
 +++ b/app/cmd/client.go
-@@ -39,7 +39,8 @@ import (
+@@ -14,6 +14,7 @@ import (
+ 	"slices"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"syscall"
+ 	"time"
+ 
+@@ -39,7 +40,9 @@ import (
  
  // Client flags
  var (
 -	showQR bool
-+	showQR       bool
-+	socks5Server socks5.Server
++	showQR                bool
++	socks5ServerInstances map[string]*socks5.Server // Track instances by listen address (using pointers)
++	socks5ServerMutex     sync.RWMutex              // Protect the instances map
  )
  
  var clientCmd = &cobra.Command{
-@@ -445,11 +446,11 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -445,11 +448,12 @@ func runClient(cmd *cobra.Command, args []string) {
  	logger.Info("client mode")
  
  	if err := viper.ReadInConfig(); err != nil {
 -		logger.Fatal("failed to read client config", zap.Error(err))
 +		logger.Error("failed to read client config", zap.Error(err))
  	}
++
  	var config clientConfig
  	if err := viper.Unmarshal(&config); err != nil {
 -		logger.Fatal("failed to parse client config", zap.Error(err))
@@ -26,7 +36,7 @@ index 65bc7e0..450ab6c 100644
  	}
  
  	c, err := client.NewReconnectableClient(
-@@ -465,7 +466,8 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -465,7 +469,8 @@ func runClient(cmd *cobra.Command, args []string) {
  			}
  		}, config.Lazy)
  	if err != nil {
@@ -36,7 +46,7 @@ index 65bc7e0..450ab6c 100644
  	}
  	defer c.Close()
  
-@@ -536,14 +538,18 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -536,14 +541,35 @@ func runClient(cmd *cobra.Command, args []string) {
  		} else {
  			_ = c.Close() // Close the client here as Fatal will exit the program without running defer
  			if r.Err != nil {
@@ -51,18 +61,41 @@ index 65bc7e0..450ab6c 100644
  }
  
 +func stopClient() {
-+	socks5Server.Stop()
++	// Stop all instances for backwards compatibility
++	socks5ServerMutex.Lock()
++	defer socks5ServerMutex.Unlock()
++	for listenAddr, server := range socks5ServerInstances {
++		logger.Info("Stopping SOCKS5 server instance", zap.String("listen", listenAddr))
++		server.Stop()
++		delete(socks5ServerInstances, listenAddr)
++	}
++}
++
++func stopClientByAddress(listenAddr string) {
++	socks5ServerMutex.Lock()
++	defer socks5ServerMutex.Unlock()
++	if server, exists := socks5ServerInstances[listenAddr]; exists {
++		logger.Info("Stopping SOCKS5 server instance", zap.String("listen", listenAddr))
++		server.Stop()
++		delete(socks5ServerInstances, listenAddr)
++	}
 +}
 +
  type clientModeRunner struct {
  	ModeMap map[string]func() error
  }
-@@ -612,6 +618,9 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
+@@ -612,6 +638,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
  		EventLogger: &socks5Logger{},
  	}
  	logger.Info("SOCKS5 server listening", zap.String("addr", config.Listen))
 +
-+	socks5Server = s
++	// Store the server instance by listen address
++	socks5ServerMutex.Lock()
++	if socks5ServerInstances == nil {
++		socks5ServerInstances = make(map[string]*socks5.Server)
++	}
++	socks5ServerInstances[config.Listen] = &s
++	socks5ServerMutex.Unlock()
 +
  	return s.Serve(l)
  }
@@ -112,10 +145,10 @@ index db45052..ca802c1 100644
  	defer conn.Close()
  
 diff --git a/app/cmd/root.go b/app/cmd/root.go
-index 13f9705..3fb932c 100644
+index 13f9705..1176e72 100644
 --- a/app/cmd/root.go
 +++ b/app/cmd/root.go
-@@ -105,6 +105,21 @@ func Execute() {
+@@ -105,6 +105,25 @@ func Execute() {
  	}
  }
  
@@ -134,10 +167,14 @@ index 13f9705..3fb932c 100644
 +	stopClient()
 +}
 +
++func StopByAddress(listenAddr string) {
++	stopClientByAddress(listenAddr)
++}
++
  func init() {
  	initFlags()
  	cobra.MousetrapHelpText = "" // Disable the mousetrap so Windows users can run the exe directly by double-clicking
-@@ -136,12 +151,12 @@ func initLogger() {
+@@ -136,12 +155,12 @@ func initLogger() {
  	level, ok := logLevelMap[strings.ToLower(logLevel)]
  	if !ok {
  		fmt.Printf("unsupported log level: %s\n", logLevel)
@@ -152,7 +189,7 @@ index 13f9705..3fb932c 100644
  	}
  	c := zap.Config{
  		Level:             zap.NewAtomicLevelAt(level),
-@@ -156,7 +171,7 @@ func initLogger() {
+@@ -156,7 +175,7 @@ func initLogger() {
  	logger, err = c.Build()
  	if err != nil {
  		fmt.Printf("failed to initialize logger: %s\n", err)
@@ -301,30 +338,37 @@ index 11eadd0..43f8d86 100644
  	if resp.HasUpdate {
  		logger.Info("update available",
 diff --git a/app/internal/socks5/server.go b/app/internal/socks5/server.go
-index 0fc7de6..fbec34d 100644
+index 0fc7de6..7a00aec 100644
 --- a/app/internal/socks5/server.go
 +++ b/app/internal/socks5/server.go
-@@ -8,6 +8,7 @@ import (
+@@ -7,6 +7,8 @@ import (
+ 
  	"github.com/txthinking/socks5"
  
- 	"github.com/apernet/hysteria/core/v2/client"
 +	"sync"
++
+ 	"github.com/apernet/hysteria/core/v2/client"
  )
  
- const udpBufferSize = 4096
-@@ -18,6 +19,9 @@ type Server struct {
+@@ -18,6 +20,10 @@ type Server struct {
  	AuthFunc    func(username, password string) bool // nil = no authentication
  	DisableUDP  bool
  	EventLogger EventLogger
 +
-+	mu   sync.Mutex
-+	stop bool
++	mu       sync.Mutex
++	stop     bool
++	listener net.Listener
  }
  
  type EventLogger interface {
-@@ -29,6 +33,15 @@ type EventLogger interface {
+@@ -28,15 +34,44 @@ type EventLogger interface {
+ }
  
  func (s *Server) Serve(listener net.Listener) error {
++	s.mu.Lock()
++	s.listener = listener
++	s.mu.Unlock()
++
  	for {
 +		s.mu.Lock()
 +		stop := s.stop
@@ -337,20 +381,90 @@ index 0fc7de6..fbec34d 100644
 +
  		conn, err := listener.Accept()
  		if err != nil {
++			// Check if error is due to stopping
++			s.mu.Lock()
++			stopping := s.stop
++			s.mu.Unlock()
++			if stopping {
++				return nil // Clean exit when stopped
++			}
  			return err
-@@ -37,6 +50,12 @@ func (s *Server) Serve(listener net.Listener) error {
+ 		}
+ 		go s.dispatch(conn)
  	}
  }
  
 +func (s *Server) Stop() {
 +	s.mu.Lock()
 +	s.stop = true
++	if s.listener != nil {
++		_ = s.listener.Close() // Force immediate closure
++	}
 +	s.mu.Unlock()
 +}
 +
  func (s *Server) dispatch(conn net.Conn) {
  	ok, _ := s.negotiate(conn)
  	if !ok {
+diff --git a/app/internal/tun/server.go b/app/internal/tun/server.go
+index a999051..76e9c8c 100644
+--- a/app/internal/tun/server.go
++++ b/app/internal/tun/server.go
+@@ -217,6 +217,10 @@ type interfaceFinder struct{}
+ 
+ var _ control.InterfaceFinder = (*interfaceFinder)(nil)
+ 
++func (f *interfaceFinder) Update() error {
++	return nil
++}
++
+ func (f *interfaceFinder) InterfaceIndexByName(name string) (int, error) {
+ 	ifce, err := net.InterfaceByName(name)
+ 	if err != nil {
+@@ -225,6 +229,43 @@ func (f *interfaceFinder) InterfaceIndexByName(name string) (int, error) {
+ 	return ifce.Index, nil
+ }
+ 
++func (f *interfaceFinder) InterfaceByAddr(addr netip.Addr) (*control.Interface, error) {
++	ifces, err := net.Interfaces()
++	if err != nil {
++		return nil, err
++	}
++	for _, ifce := range ifces {
++		addrs, err := ifce.Addrs()
++		if err != nil {
++			continue
++		}
++		for _, a := range addrs {
++			if ip, ok := a.(*net.IPNet); ok && ip.IP.Equal(addr.AsSlice()) {
++				return &control.Interface{
++					Index: ifce.Index,
++					Name:  ifce.Name,
++				}, nil
++			}
++		}
++	}
++	return nil, fmt.Errorf("no interface found for address %s", addr)
++}
++
++func (f *interfaceFinder) Interfaces() []control.Interface {
++	ifces, err := net.Interfaces()
++	if err != nil {
++		return nil
++	}
++	result := make([]control.Interface, len(ifces))
++	for i, ifce := range ifces {
++		result[i] = control.Interface{
++			Index: ifce.Index,
++			Name:  ifce.Name,
++		}
++	}
++	return result
++}
++
+ func (f *interfaceFinder) InterfaceNameByIndex(index int) (string, error) {
+ 	ifce, err := net.InterfaceByIndex(index)
+ 	if err != nil {
 diff --git a/app/main.go b/app/main.go
 index 81d8168..5276507 100644
 --- a/app/main.go

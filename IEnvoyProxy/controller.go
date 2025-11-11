@@ -17,6 +17,7 @@ import (
 
 	hysteria2 "github.com/apernet/hysteria/app/v2/cmd"
 	v2ray "github.com/v2fly/v2ray-core/v5/envoy"
+	xray "github.com/xtls/xray-core/envoy"
 	"gitlab.com/stevenmcdonald/tubesocks"
 	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
 	ptlog "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/common/log"
@@ -74,6 +75,12 @@ const (
 
 	// V2RayWechat - V2Ray Proxy via WeChat
 	V2RayWechat = "v2ray_wechat"
+
+	// V2RayHttp - V2Ray Proxy via HTTP
+	V2RayHttp = "v2ray_http"
+
+	// XRayXhttp - Xray Proxy via HTTP
+	XRayXhttp = "xray_xhttp"
 
 	// Hysteria2 - Hysteria 2 Proxy
 	Hysteria2 = "hysteria2"
@@ -146,6 +153,9 @@ type Controller struct {
 	// V2RayWsPath - path to the websocket (V2RayWs only!)
 	V2RayWsPath string
 
+	// V2RayHttpPath - path to the HTTP endpoint (V2RayHttp only!)
+	V2RayHttpPath string
+
 	// V2RayId - V2Ray UUID for auth
 	V2RayId string
 
@@ -154,6 +164,20 @@ type Controller struct {
 
 	// V2RayServerName - Server name used for TLS authentication.
 	V2RayServerName string
+
+	// V2RayHostname - Hostname for domain fronting (used in V2Ray-WS and V2Ray-HTTP)
+	V2RayHostname string
+
+	// V2RayUtlsFingerprint - UTLS fingerprint for V2Ray transports
+	V2RayUtlsFingerprint string
+
+	XRayServerAddress string
+	XRayServerPort    string
+	XRayXhttpPath     string
+	XRayId            string
+	XRayAllowInsecure bool
+	XRayServerName    string
+	XRayHostname      string
 
 	// Hysteria2Server - A Hysteria2 server URL https://v2.hysteria.network/docs/developers/URI-Scheme/
 	Hysteria2Server string
@@ -175,6 +199,8 @@ type Controller struct {
 	v2rayWsRunning     bool
 	v2raySrtpRunning   bool
 	v2rayWechatRunning bool
+	v2rayHttpRunning   bool
+	xrayXhttpRunning   bool
 	hysteria2Running   bool
 
 	obf4TubeSocksPort     int
@@ -182,6 +208,8 @@ type Controller struct {
 	v2rayWsPort           int
 	v2raySrtpPort         int
 	v2rayWechatPort       int
+	v2rayHttpPort         int
+	xrayXhttpPort         int
 	hysteria2Port         int
 }
 
@@ -205,6 +233,8 @@ func NewController(stateDir string, enableLogging, unsafeLogging bool, logLevel 
 		v2raySrtpPort:    47600,
 		v2rayWechatPort:  47700,
 		v2rayWsPort:      47800,
+		v2rayHttpPort:    47900,
+		xrayXhttpPort:    48100,
 		hysteria2Port:    48000,
 	}
 
@@ -409,6 +439,18 @@ func (c *Controller) LocalAddress(methodName string) string {
 		}
 		return ""
 
+	case V2RayHttp:
+		if c.v2rayHttpRunning {
+			return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.v2rayHttpPort))
+		}
+		return ""
+
+	case XRayXhttp:
+		if c.xrayXhttpRunning {
+			return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.xrayXhttpPort))
+		}
+		return ""
+
 	case Hysteria2:
 		if c.hysteria2Running {
 			return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.hysteria2Port))
@@ -452,6 +494,18 @@ func (c *Controller) Port(methodName string) int {
 	case V2RayWechat:
 		if c.v2rayWechatRunning {
 			return c.v2rayWechatPort
+		}
+		return 0
+
+	case V2RayHttp:
+		if c.v2rayHttpRunning {
+			return c.v2rayHttpPort
+		}
+		return 0
+
+	case XRayXhttp:
+		if c.xrayXhttpRunning {
+			return c.xrayXhttpPort
 		}
 		return 0
 
@@ -560,8 +614,10 @@ func (c *Controller) Start(methodName string, proxy string) error {
 			c.v2rayWsPort = findPort(c.v2rayWsPort)
 
 			err := v2ray.StartWs(c.v2rayWsPort, c.V2RayServerAddress, c.V2RayServerPort, c.V2RayWsPath, c.V2RayId, v2ray.WsConfigOptional{
-				AllowInsecure: c.V2RayAllowInsecure,
-				ServerName:    c.V2RayServerName,
+				AllowInsecure:   c.V2RayAllowInsecure,
+				ServerName:      c.V2RayServerName,
+				Hostname:        c.V2RayHostname,
+				UtlsFingerprint: c.V2RayUtlsFingerprint,
 			})
 			if err != nil {
 				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
@@ -595,6 +651,42 @@ func (c *Controller) Start(methodName string, proxy string) error {
 			}
 
 			c.v2rayWechatRunning = true
+		}
+
+	case V2RayHttp:
+		if !c.v2rayHttpRunning {
+			c.v2rayHttpPort = findPort(c.v2rayHttpPort)
+
+			err := v2ray.StartHttp(c.v2rayHttpPort, c.V2RayServerAddress, c.V2RayServerPort, c.V2RayHttpPath, c.V2RayId, v2ray.HttpConfigOptional{
+				AllowInsecure:   c.V2RayAllowInsecure,
+				ServerName:      c.V2RayServerName,
+				Hostname:        c.V2RayHostname,
+				UtlsFingerprint: c.V2RayUtlsFingerprint,
+			})
+			if err != nil {
+				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
+				return err
+			}
+
+			c.v2rayHttpRunning = true
+		}
+
+	case XRayXhttp:
+		if !c.xrayXhttpRunning {
+			c.xrayXhttpPort = findPort(c.xrayXhttpPort)
+
+			err := xray.StartXrxh(c.xrayXhttpPort, c.XRayServerAddress, c.XRayServerPort, c.XRayXhttpPath, c.XRayId, xray.XrxhConfigOptional{
+				AllowInsecure: c.XRayAllowInsecure,
+				ServerName:    c.XRayServerName,
+				Hostname:      c.XRayHostname,
+				XhttpMode:     "stream-one",
+			})
+			if err != nil {
+				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
+				return err
+			}
+
+			c.xrayXhttpRunning = true
 		}
 
 	case Hysteria2:
@@ -765,10 +857,29 @@ func (c *Controller) Stop(methodName string) {
 			ptlog.Warnf("No listener for %s", methodName)
 		}
 
+	case V2RayHttp:
+		if c.v2rayHttpRunning {
+			ptlog.Noticef("Shutting down %s", methodName)
+			go v2ray.StopHttp()
+			c.v2rayHttpRunning = false
+		} else {
+			ptlog.Warnf("No listener for %s", methodName)
+		}
+
+	case XRayXhttp:
+		if c.xrayXhttpRunning {
+			ptlog.Noticef("Shutting down %s", methodName)
+			go xray.StopXrxh()
+			c.xrayXhttpRunning = false
+		} else {
+			ptlog.Warnf("No listener for %s", methodName)
+		}
+
 	case Hysteria2:
 		if c.hysteria2Running {
 			ptlog.Noticef("Shutting down %s", methodName)
-			go hysteria2.Stop()
+			listenAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(c.hysteria2Port))
+			go hysteria2.StopByAddress(listenAddr)
 			_ = os.Remove(fmt.Sprintf("%s/hysteria.yaml", c.stateDir))
 			c.hysteria2Running = false
 		} else {
