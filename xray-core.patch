@@ -1,6 +1,50 @@
+diff -Naur a/core/domain2ip.go b/core/domain2ip.go
+--- a/core/domain2ip.go	1970-01-01 00:00:00.000000000 +0000
++++ b/core/domain2ip.go	2025-11-12 16:24:48.678480697 +0000
+@@ -0,0 +1,40 @@
++package core
++
++import (
++	"sync"
++)
++
++// DomainToIPs is a map of domain names to IP addresses
++// Note: there may be multiple IP addresses for a given domain
++var DomainToIPs = map[string][]string{}
++var domainMutex sync.RWMutex
++
++// GetDomainIPs returns IP addresses for a given domain
++func GetDomainIPs(domain string) ([]string, bool) {
++	domainMutex.RLock()
++	defer domainMutex.RUnlock()
++	ips, ok := DomainToIPs[domain]
++	return ips, ok
++}
++
++// SetDomainIPs sets IP addresses for a given domain
++func SetDomainIPs(domain string, ips []string) {
++	domainMutex.Lock()
++	defer domainMutex.Unlock()
++	DomainToIPs[domain] = ips
++}
++
++// DropDomainIPs drops specific IP address for a given domain from the cache
++func DropDomainIPs(domain string, ip string) {
++	domainMutex.Lock()
++	defer domainMutex.Unlock()
++	for i, existingIP := range DomainToIPs[domain] {
++		if existingIP == ip {
++			DomainToIPs[domain] = append(DomainToIPs[domain][:i], DomainToIPs[domain][i+1:]...)
++			if len(DomainToIPs[domain]) == 0 {
++				delete(DomainToIPs, domain)
++			}
++			break
++		}
++	}
++}
 diff -Naur a/envoy/xray.go b/envoy/xray.go
 --- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/envoy/xray.go	2025-11-06 16:20:02.046786427 +0000
++++ b/envoy/xray.go	2025-11-12 17:06:40.552434036 +0000
 @@ -0,0 +1,189 @@
 +package xray
 +
@@ -203,3 +247,69 @@ diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
  			}(r)
  		})
  		stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
+--- a/transport/internet/splithttp/dialer.go	2025-10-14 20:23:35.490996211 +0000
++++ b/transport/internet/splithttp/dialer.go	2025-11-12 16:41:49.620411943 +0000
+@@ -21,6 +21,7 @@
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/signal/done"
+ 	"github.com/xtls/xray-core/common/uuid"
++	core "github.com/xtls/xray-core/core"
+ 	"github.com/xtls/xray-core/transport/internet"
+ 	"github.com/xtls/xray-core/transport/internet/browser_dialer"
+ 	"github.com/xtls/xray-core/transport/internet/reality"
+@@ -253,6 +254,17 @@
+ 		dest.Network = net.Network_UDP
+ 	}
+ 
++	// Only try to resolve using GetDomainIPs if the address is a domain, not an IP
++	var originalDomain string
++	if dest.Address.Family().IsDomain() {
++		originalDomain = dest.Address.Domain()
++		if ips, ok := core.GetDomainIPs(originalDomain); ok {
++			dest.Address = net.ParseAddress(ips[0])
++		}
++	} else {
++		originalDomain = dest.Address.String()
++	}
++
+ 	transportConfiguration := streamSettings.ProtocolSettings.(*Config)
+ 	var requestURL url.URL
+ 
+@@ -269,7 +281,7 @@
+ 		requestURL.Host = realityConfig.ServerName
+ 	}
+ 	if requestURL.Host == "" {
+-		requestURL.Host = dest.Address.String()
++		requestURL.Host = originalDomain
+ 	}
+ 
+ 	sessionIdUuid := uuid.New()
+@@ -311,6 +323,18 @@
+ 		if httpVersion2 == "3" {
+ 			dest2.Network = net.Network_UDP
+ 		}
++
++		// Only try to resolve using GetDomainIPs if the address is a domain, not an IP
++		var originalDomain string
++		if dest2.Address.Family().IsDomain() {
++			originalDomain = dest2.Address.Domain()
++			if ips, ok := core.GetDomainIPs(originalDomain); ok {
++				dest2.Address = net.ParseAddress(ips[0])
++			}
++		} else {
++			originalDomain = dest2.Address.String()
++		}
++
+ 		if tlsConfig2 != nil || realityConfig2 != nil {
+ 			requestURL2.Scheme = "https"
+ 		} else {
+@@ -325,7 +349,7 @@
+ 			requestURL2.Host = realityConfig2.ServerName
+ 		}
+ 		if requestURL2.Host == "" {
+-			requestURL2.Host = dest2.Address.String()
++			requestURL2.Host = originalDomain
+ 		}
+ 		requestURL2.Path = config2.GetNormalizedPath() + sessionIdUuid.String()
+ 		requestURL2.RawQuery = config2.GetNormalizedQuery()
