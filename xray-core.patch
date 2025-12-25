@@ -1,6 +1,6 @@
 diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 --- a/core/domain2ip.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/core/domain2ip.go	2025-11-12 16:24:48.678480697 +0000
++++ b/core/domain2ip.go	2025-11-30 13:28:10.716214189 +0000
 @@ -0,0 +1,40 @@
 +package core
 +
@@ -44,7 +44,7 @@ diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 +}
 diff -Naur a/envoy/xray.go b/envoy/xray.go
 --- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/envoy/xray.go	2025-11-12 17:06:40.552434036 +0000
++++ b/envoy/xray.go	2025-11-30 13:28:10.716214189 +0000
 @@ -0,0 +1,189 @@
 +package xray
 +
@@ -237,7 +237,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +}
 diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
 --- a/proxy/wireguard/tun.go	2025-10-14 20:23:35.482996098 +0000
-+++ b/proxy/wireguard/tun.go	2025-11-06 13:06:30.235470037 +0000
++++ b/proxy/wireguard/tun.go	2025-11-30 13:28:10.716214189 +0000
 @@ -194,7 +194,7 @@
  					Timeout: 15 * time.Second,
  				})
@@ -249,7 +249,7 @@ diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
  		stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
 --- a/transport/internet/splithttp/dialer.go	2025-10-14 20:23:35.490996211 +0000
-+++ b/transport/internet/splithttp/dialer.go	2025-11-12 16:41:49.620411943 +0000
++++ b/transport/internet/splithttp/dialer.go	2025-11-30 13:28:10.716214189 +0000
 @@ -21,6 +21,7 @@
  	"github.com/xtls/xray-core/common/net"
  	"github.com/xtls/xray-core/common/signal/done"
@@ -313,3 +313,15 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		}
  		requestURL2.Path = config2.GetNormalizedPath() + sessionIdUuid.String()
  		requestURL2.RawQuery = config2.GetNormalizedQuery()
+diff -Naur a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
+--- a/transport/internet/websocket/dialer.go	2025-10-14 20:23:35.490996211 +0000
++++ b/transport/internet/websocket/dialer.go	2025-12-25 03:59:41.479658809 +0000
+@@ -53,7 +53,7 @@
+ 		},
+ 		ReadBufferSize:   4 * 1024,
+ 		WriteBufferSize:  4 * 1024,
+-		HandshakeTimeout: time.Second * 8,
++		HandshakeTimeout: time.Second * 15,
+ 	}
+ 
+ 	protocol := "ws"

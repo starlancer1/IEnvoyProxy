@@ -586,10 +586,10 @@ index 8a9da0e..c957e40 100644
  				return nil, err
  			}
 diff --git a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
-index 3fb229f..9f7b204 100644
+index 3fb229f..9deea95 100644
 --- a/transport/internet/websocket/dialer.go
 +++ b/transport/internet/websocket/dialer.go
-@@ -38,6 +38,17 @@ func init() {
+@@ -38,13 +38,24 @@ func init() {
  func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (net.Conn, error) {
  	wsSettings := streamSettings.ProtocolSettings.(*Config)
  
@@ -607,6 +607,14 @@ index 3fb229f..9f7b204 100644
  	dialer := &websocket.Dialer{
  		NetDial: func(network, addr string) (net.Conn, error) {
  			return internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
+ 		},
+ 		ReadBufferSize:   4 * 1024,
+ 		WriteBufferSize:  4 * 1024,
+-		HandshakeTimeout: time.Second * 8,
++		HandshakeTimeout: time.Second * 15,
+ 	}
+ 
+ 	protocol := "ws"
 @@ -63,7 +74,11 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
  				return nil, newError("dial TLS connection failed").Base(err)
  			}
