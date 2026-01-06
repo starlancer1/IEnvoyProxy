@@ -79,7 +79,7 @@ const (
 	// V2RayHttp - V2Ray Proxy via HTTP
 	V2RayHttp = "v2ray_http"
 
-	// XRayXhttp - Xray Proxy via HTTP
+	// XRayXhttp - Xray Proxy via HTTP/2 or HTTP/1.1
 	XRayXhttp = "xray_xhttp"
 
 	// Hysteria2 - Hysteria 2 Proxy
@@ -178,6 +178,8 @@ type Controller struct {
 	XRayAllowInsecure bool
 	XRayServerName    string
 	XRayHostname      string
+	XRayXhttpMode     string
+	XRayXhttpVersion  string
 
 	// Hysteria2Server - A Hysteria2 server URL https://v2.hysteria.network/docs/developers/URI-Scheme/
 	Hysteria2Server string
@@ -679,7 +681,8 @@ func (c *Controller) Start(methodName string, proxy string) error {
 				AllowInsecure: c.XRayAllowInsecure,
 				ServerName:    c.XRayServerName,
 				Hostname:      c.XRayHostname,
-				XhttpMode:     "stream-one",
+				XhttpMode:     c.XRayXhttpMode,
+				XhttpVersion:  c.XRayXhttpVersion,
 			})
 			if err != nil {
 				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
