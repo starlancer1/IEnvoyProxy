@@ -1,6 +1,6 @@
 diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 --- a/core/domain2ip.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/core/domain2ip.go	2025-12-26 05:06:02.486386375 +0000
++++ b/core/domain2ip.go	2026-02-23 16:54:12.830250167 +0000
 @@ -0,0 +1,40 @@
 +package core
 +
@@ -44,8 +44,8 @@ diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 +}
 diff -Naur a/envoy/xray.go b/envoy/xray.go
 --- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/envoy/xray.go	2025-12-30 09:00:21.428466752 +0000
-@@ -0,0 +1,267 @@
++++ b/envoy/xray.go	2026-03-15 22:07:06.064750270 +0000
+@@ -0,0 +1,265 @@
 +package xray
 +
 +// copied and modified from main/commands/run.go
@@ -67,10 +67,8 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +
 +import (
 +	"fmt"
-+	"os"
-+	"os/signal"
 +	"strings"
-+	"syscall"
++	"sync"
 +
 +	core "github.com/xtls/xray-core/core"
 +	_ "github.com/xtls/xray-core/main/distro/all"
@@ -78,7 +76,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +
 +const jsonV5 = "json"
 +
-+var osXrxhSignals = make(chan os.Signal, 1)
++var xrxhServers sync.Map
 +
 +// getInbound
 +//
@@ -296,26 +294,26 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +		return err
 +	}
 +
-+	go func(server *core.Instance) {
-+		defer func(server *core.Instance) {
-+			_ = server.Close()
-+		}(server)
-+
-+		{
-+			signal.Notify(osXrxhSignals, syscall.SIGTERM)
-+			<-osXrxhSignals
-+		}
-+	}(server)
-+
++	xrxhServers.Store(clientPort, server)
 +	return nil
 +}
 +
++func StopXrxhByPort(clientPort int) {
++	if val, ok := xrxhServers.LoadAndDelete(clientPort); ok {
++		_ = val.(*core.Instance).Close()
++	}
++}
++
 +func StopXrxh() {
-+	osXrxhSignals <- syscall.SIGTERM
++	xrxhServers.Range(func(key, value any) bool {
++		xrxhServers.Delete(key)
++		_ = value.(*core.Instance).Close()
++		return true
++	})
 +}
 diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
 --- a/proxy/wireguard/tun.go	2025-10-14 20:23:35.482996098 +0000
-+++ b/proxy/wireguard/tun.go	2025-12-25 04:07:11.117759559 +0000
++++ b/proxy/wireguard/tun.go	2026-02-23 16:54:12.830250167 +0000
 @@ -194,7 +194,7 @@
  					Timeout: 15 * time.Second,
  				})
@@ -327,7 +325,7 @@ diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
  		stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
 --- a/transport/internet/splithttp/dialer.go	2025-10-14 20:23:35.490996211 +0000
-+++ b/transport/internet/splithttp/dialer.go	2025-12-26 05:09:52.901436805 +0000
++++ b/transport/internet/splithttp/dialer.go	2026-02-23 16:54:12.830250167 +0000
 @@ -21,6 +21,7 @@
  	"github.com/xtls/xray-core/common/net"
  	"github.com/xtls/xray-core/common/signal/done"
@@ -438,7 +436,7 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		requestURL2.RawQuery = config2.GetNormalizedQuery()
 diff -Naur a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
 --- a/transport/internet/websocket/dialer.go	2025-10-14 20:23:35.490996211 +0000
-+++ b/transport/internet/websocket/dialer.go	2025-12-25 04:07:11.117759559 +0000
++++ b/transport/internet/websocket/dialer.go	2026-02-23 16:54:12.830250167 +0000
 @@ -53,7 +53,7 @@
  		},
  		ReadBufferSize:   4 * 1024,

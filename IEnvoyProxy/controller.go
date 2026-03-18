@@ -232,12 +232,12 @@ func NewController(stateDir string, enableLogging, unsafeLogging bool, logLevel 
 	c := &Controller{
 		stateDir:         stateDir,
 		transportStopped: transportStopped,
-		v2raySrtpPort:    47600,
-		v2rayWechatPort:  47700,
-		v2rayWsPort:      47800,
-		v2rayHttpPort:    47900,
-		xrayXhttpPort:    48100,
-		hysteria2Port:    48000,
+		v2raySrtpPort:    45000,
+		v2rayWechatPort:  46000,
+		v2rayWsPort:      47000,
+		v2rayHttpPort:    48000,
+		xrayXhttpPort:    49000,
+		hysteria2Port:    50000,
 	}
 
 	if logLevel == "" {
@@ -465,6 +465,17 @@ func (c *Controller) LocalAddress(methodName string) string {
 		}
 		return ""
 	}
+}
+
+// SetPortOffset shifts all internal base ports by the given offset.
+// Use this to prevent port collisions when running multiple controllers concurrently.
+func (c *Controller) SetPortOffset(offset int) {
+	c.v2raySrtpPort += offset
+	c.v2rayWechatPort += offset
+	c.v2rayWsPort += offset
+	c.v2rayHttpPort += offset
+	c.xrayXhttpPort += offset
+	c.hysteria2Port += offset
 }
 
 // Port - Port of the given transport.
@@ -835,8 +846,8 @@ func (c *Controller) Stop(methodName string) {
 
 	case V2RayWs:
 		if c.v2rayWsRunning {
-			ptlog.Noticef("Shutting down %s", methodName)
-			go v2ray.StopWs()
+			ptlog.Noticef("Shutting down %s on port %d", methodName, c.v2rayWsPort)
+			go v2ray.StopWsByPort(c.v2rayWsPort)
 			c.v2rayWsRunning = false
 		} else {
 			ptlog.Warnf("No listener for %s", methodName)
@@ -844,8 +855,8 @@ func (c *Controller) Stop(methodName string) {
 
 	case V2RaySrtp:
 		if c.v2raySrtpRunning {
-			ptlog.Noticef("Shutting down %s", methodName)
-			go v2ray.StopSrtp()
+			ptlog.Noticef("Shutting down %s on port %d", methodName, c.v2raySrtpPort)
+			go v2ray.StopSrtpByPort(c.v2raySrtpPort)
 			c.v2raySrtpRunning = false
 		} else {
 			ptlog.Warnf("No listener for %s", methodName)
@@ -853,8 +864,8 @@ func (c *Controller) Stop(methodName string) {
 
 	case V2RayWechat:
 		if c.v2rayWechatRunning {
-			ptlog.Noticef("Shutting down %s", methodName)
-			go v2ray.StopWechat()
+			ptlog.Noticef("Shutting down %s on port %d", methodName, c.v2rayWechatPort)
+			go v2ray.StopWechatByPort(c.v2rayWechatPort)
 			c.v2rayWechatRunning = false
 		} else {
 			ptlog.Warnf("No listener for %s", methodName)
@@ -862,8 +873,8 @@ func (c *Controller) Stop(methodName string) {
 
 	case V2RayHttp:
 		if c.v2rayHttpRunning {
-			ptlog.Noticef("Shutting down %s", methodName)
-			go v2ray.StopHttp()
+			ptlog.Noticef("Shutting down %s on port %d", methodName, c.v2rayHttpPort)
+			go v2ray.StopHttpByPort(c.v2rayHttpPort)
 			c.v2rayHttpRunning = false
 		} else {
 			ptlog.Warnf("No listener for %s", methodName)
@@ -871,8 +882,8 @@ func (c *Controller) Stop(methodName string) {
 
 	case XRayXhttp:
 		if c.xrayXhttpRunning {
-			ptlog.Noticef("Shutting down %s", methodName)
-			go xray.StopXrxh()
+			ptlog.Noticef("Shutting down %s on port %d", methodName, c.xrayXhttpPort)
+			go xray.StopXrxhByPort(c.xrayXhttpPort)
 			c.xrayXhttpRunning = false
 		} else {
 			ptlog.Warnf("No listener for %s", methodName)
