@@ -939,19 +939,16 @@ func findPort(port int) int {
 	return temp
 }
 
-// isPortAvailable - Checks to see if a given port is not in use.
+// isPortAvailable - Checks whether a given port can be bound.
+// Uses a bind attempt rather than a dial so that ports held by a shutting-down
+// process (bound but not yet listening) are correctly reported as unavailable.
 //
 // @param port The port to check.
 func isPortAvailable(port int) bool {
-	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-
-	conn, err := net.DialTimeout("tcp", address, 500*time.Millisecond)
-
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
-		return true
+		return false
 	}
-
-	_ = conn.Close()
-
-	return false
+	l.Close()
+	return true
 }
