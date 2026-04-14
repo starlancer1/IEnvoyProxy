@@ -61,6 +61,9 @@ if test -e ".git"; then
     git reset --hard
     git clean -fd
     cp -a . "$TMPDIR/Xray-core"
+    cd ../dnstt || exit 1
+    git reset --hard
+    cp -a . "$TMPDIR/dnstt"
     cd ..
 else
     # No .git directory - That's a normal install.

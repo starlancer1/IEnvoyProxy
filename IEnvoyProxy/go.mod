@@ -12,6 +12,7 @@ require (
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird v0.0.0-20250319164402-5e3f0aeb5008
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2 v2.11.0
 	golang.org/x/net v0.39.0
+	www.bamsoftware.com/git/dnstt.git v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -188,4 +189,5 @@ replace (
 	github.com/v2fly/v2ray-core/v5 => ../v2ray-core
 	github.com/xtls/xray-core => ../Xray-core
 	gvisor.dev/gvisor => gvisor.dev/gvisor v0.0.0-20231020174304-b8a429915ff1
+	www.bamsoftware.com/git/dnstt.git => ../dnstt
 )

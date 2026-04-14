@@ -25,6 +25,7 @@ import (
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/base"
 	sfversion "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/version"
 	"golang.org/x/net/proxy"
+	dnsttclient "www.bamsoftware.com/git/dnstt.git/dnstt-client/lib"
 )
 
 // LogFileName - the filename of the log residing in `StateDir`.
@@ -84,6 +85,10 @@ const (
 
 	// Hysteria2 - Hysteria 2 Proxy
 	Hysteria2 = "hysteria2"
+
+	// Dnstt - DNS tunnel transport (tladesignz fork of David Fifield's dnstt).
+	// Config is passed per-connection via SOCKS5 args: doh, pubkey, domain.
+	Dnstt = "dnstt"
 )
 
 var (
@@ -766,6 +771,32 @@ func (c *Controller) Start(methodName string, proxy string) error {
 			// on that configured SOCKS5 port, yet and connections would fail.
 			time.Sleep(time.Second)
 		}
+
+	case Dnstt:
+		ln, err := pt.ListenSocks("tcp", "127.0.0.1:0")
+		if err != nil {
+			ptlog.Errorf("Failed to initialize %s: %s", methodName, err.Error())
+			return err
+		}
+
+		c.listeners[methodName] = ln
+		c.shutdown[methodName] = make(chan struct{})
+
+		utlsID, err := dnsttclient.SampleUTLSDistribution("3*Chrome_133,3*Chrome_131,2*Firefox_120,1*Safari_16_0,1*Edge_106")
+		if err != nil {
+			ptlog.Errorf("Failed to initialize %s uTLS: %s", methodName, err.Error())
+			return err
+		}
+
+		go func() {
+			var wg sync.WaitGroup
+			go dnsttclient.AcceptLoop(ln, utlsID, c.shutdown[methodName], &wg, log.New(io.Discard, "", 0))
+			<-c.shutdown[methodName]
+			wg.Wait()
+			if c.transportStopped != nil {
+				go c.transportStopped.Stopped(methodName, nil)
+			}
+		}()
 
 	case Snowflake:
 		extraArgs := &pt.Args{}
