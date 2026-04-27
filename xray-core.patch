@@ -44,8 +44,8 @@ diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 +}
 diff -Naur a/envoy/xray.go b/envoy/xray.go
 --- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/envoy/xray.go	2026-03-15 22:07:06.064750270 +0000
-@@ -0,0 +1,265 @@
++++ b/envoy/xray.go	2026-04-27 11:54:21.346086194 +0000
+@@ -0,0 +1,267 @@
 +package xray
 +
 +// copied and modified from main/commands/run.go
@@ -99,6 +99,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +		return fmt.Sprintf(`
 +  {
 +    "log": {
++      "access": "none",
 +      "loglevel": "warning"
 +    },
 +    "inbounds": [ %s ],
@@ -140,6 +141,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +		return fmt.Sprintf(`
 +  {
 +    "log": {
++      "access": "none",
 +      "loglevel": "warning"
 +    },
 +    "inbounds": [ %s ],
