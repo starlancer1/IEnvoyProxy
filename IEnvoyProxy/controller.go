@@ -1086,7 +1086,7 @@ func (c *Controller) Stop(methodName string) {
 		}
 
 	case Masque:
-		if c.echProxyRunning {
+		if c.masqueRunning {
 			ptlog.Noticef("Shutting down %s", methodName)
 			go c.masqueProxy.Stop()
 			c.masqueRunning = false
