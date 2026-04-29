@@ -1,6 +1,8 @@
 package IEnvoyProxy
 
 import (
+	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"io/fs"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	hysteria2 "github.com/apernet/hysteria/app/v2/cmd"
+	ndns "github.com/ncruces/go-dns"
 	v2ray "github.com/v2fly/v2ray-core/v5/envoy"
 	xray "github.com/xtls/xray-core/envoy"
 	"gitlab.com/stevenmcdonald/tubesocks"
@@ -89,6 +92,12 @@ const (
 	// Dnstt - DNS tunnel transport (tladesignz fork of David Fifield's dnstt).
 	// Config is passed per-connection via SOCKS5 args: doh, pubkey, domain.
 	Dnstt = "dnstt"
+
+	// EnvoyEch - Envoy ECH proxy
+	EnvoyEch = "envoy_ech"
+
+	// Masque - Envoy MASQUE Proxy
+	Masque = "masque"
 )
 
 var (
@@ -198,6 +207,33 @@ type Controller struct {
 	// Hysteria2BandwidthDown - Download bandwidth limit for Hysteria2
 	Hysteria2BandwidthDown string
 
+	// ECH
+	// URL to test, e.g. https://www.google.com/generate_204
+	EchTestTarget		  string
+	// expected response code, e.g. 204
+	EchTestResponse		  int
+	// Salt to use for cache busting param
+	Salt 				  string
+	// upstream Envoy server URL
+	EchEnvoyUrl     	  string
+	// hostname of the upstream URL (for convenience)
+	EchEnvoyHost	      string
+	// ECH config list data for the Envoy host, likely fetched from DNS
+	EchEnvoyEchConfigList []byte
+	// Our Proxy's Envoy URL (points to US)
+	EchProxyUrl			  string
+	// instace
+	echProxy 			  *EchProxy
+
+	// upstream host and port
+	MasqueHost			  string
+	MasquePort			  int
+	// sent in the Proxy-Authorization header
+	// required by the underlying library, set a dummy value if needed
+	MasqueProxyToken      string
+	// instance
+	masqueProxy			  *EnvoyMasqueProxy
+
 	stateDir         string
 	transportStopped OnTransportStopped
 	listeners        map[string]*pt.SocksListener
@@ -209,6 +245,8 @@ type Controller struct {
 	v2rayHttpRunning   bool
 	xrayXhttpRunning   bool
 	hysteria2Running   bool
+	echProxyRunning    bool
+	masqueRunning      bool
 
 	obf4TubeSocksPort     int
 	meekLiteTubeSocksPort int
@@ -218,11 +256,13 @@ type Controller struct {
 	v2rayHttpPort         int
 	xrayXhttpPort         int
 	hysteria2Port         int
+	echProxyPort          int
+	masqueListenPort      int
 }
 
 // NewController - Create a new Controller object.
 //
-// @param enableLogging Log to StateDir/ipt.log.
+// @param enableLogging Log to StateDir/iep.log.
 //
 // @param unsafeLogging Disable the address scrubber.
 //
@@ -243,6 +283,12 @@ func NewController(stateDir string, enableLogging, unsafeLogging bool, logLevel 
 		v2rayHttpPort:    48000,
 		xrayXhttpPort:    49000,
 		hysteria2Port:    50000,
+
+		echProxyPort:     51000,
+		EchTestTarget:    "https://www.google.com/generate_204",
+		EchTestResponse:  204,
+
+		masqueListenPort: 52000,
 	}
 
 	if logLevel == "" {
@@ -420,6 +466,31 @@ func copyLoop(socks, sfconn io.ReadWriter, done chan struct{}) {
 	}()
 }
 
+// SetEnvoyUrl - a URL to an upstream Envoy server, used by the ECH proxy
+//
+// @param envoyUrl URL to the upstream Envoy server
+// @param echConfigListStr ECH config list data as a string (from DNS)
+func (c *Controller) SetEnvoyUrl(envoyUrl, echConfigListStr string) {
+	echConfigList, err := base64.StdEncoding.DecodeString(echConfigListStr)
+	if err != nil {
+		log.Printf("error decoding echConfigList string, ECH disabled")
+		echConfigList = make([]byte, 0, 0)
+	}
+
+	log.Printf("ECH: %x", echConfigList)
+
+	c.EchEnvoyUrl = envoyUrl
+	c.EchEnvoyEchConfigList = echConfigList
+
+	// parse out the host name so we don't have to do it on every request
+	u, err := url.Parse(envoyUrl)
+	if err != nil {
+		log.Printf("error parsing envoy host name from URL %s", err)
+		return
+	}
+	c.EchEnvoyHost = u.Hostname()
+}
+
 // LocalAddress - Address of the given transport.
 //
 // @param methodName one of the constants `ScrambleSuit` (deprecated), `Obfs2` (deprecated), `Obfs3` (deprecated),
@@ -464,6 +535,18 @@ func (c *Controller) LocalAddress(methodName string) string {
 		}
 		return ""
 
+	case EnvoyEch:
+		if c.echProxyRunning {
+			return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.echProxyPort))
+		}
+		return ""
+
+	case Masque:
+		if c.masqueRunning {
+			return net.JoinHostPort("127.0.0.1", strconv.Itoa(c.masqueListenPort))
+		}
+		return ""
+
 	default:
 		if ln, ok := c.listeners[methodName]; ok {
 			return ln.Addr().String()
@@ -481,6 +564,8 @@ func (c *Controller) SetPortOffset(offset int) {
 	c.v2rayHttpPort += offset
 	c.xrayXhttpPort += offset
 	c.hysteria2Port += offset
+	c.echProxyPort += offset
+	c.masqueListenPort += offset
 }
 
 // Port - Port of the given transport.
@@ -530,6 +615,18 @@ func (c *Controller) Port(methodName string) int {
 	case Hysteria2:
 		if c.hysteria2Running {
 			return c.hysteria2Port
+		}
+		return 0
+
+	case EnvoyEch:
+		if c.echProxyRunning {
+			return c.echProxyPort
+		}
+		return 0
+
+	case Masque:
+		if c.masqueRunning {
+			return c.masqueListenPort
 		}
 		return 0
 
@@ -830,6 +927,54 @@ func (c *Controller) Start(methodName string, proxy string) error {
 
 		go acceptLoop(f, ln, nil, extraArgs, c.shutdown[methodName], methodName, c.transportStopped)
 
+	case EnvoyEch:
+		if !c.echProxyRunning {
+			c.echProxyPort = findPort(c.echProxyPort)
+
+			log.Printf("Envoy: ECH using port %d\n", c.echProxyPort)
+
+			// set this now so we can call LocalAddress :)
+			c.echProxyRunning = true
+
+			c.echProxy = &EchProxy{
+				TestTarget: c.EchTestTarget,
+				TargetResponse: c.EchTestResponse,
+				ProxyListen: c.LocalAddress(EnvoyEch),
+				EnvoyUrl: c.EchEnvoyUrl,
+				EnvoyHost: c.EchEnvoyHost,
+				EchConfigList: c.EchEnvoyEchConfigList,
+			}
+
+			log.Printf("Envoy: Starting ECH proxy to %s\n", c.echProxy.EnvoyUrl)
+			go c.echProxy.startProxy()
+
+			// wait for it to start
+			isItUpYet(c.LocalAddress(EnvoyEch))
+
+			// test HTTP/2 and HTTP/3, selecting the one that responds first
+			c.EchProxyUrl = c.echProxy.testHttps()
+			log.Printf("Envoy: Found a working proxy %s\n", c.EchProxyUrl)
+		}
+
+	case Masque:
+		if !c.masqueRunning {
+			c.masqueListenPort = findPort(c.masqueListenPort)
+
+			log.Printf("Envoy: Staring MASQUE to %s:%d", c.MasqueHost, c.MasquePort)
+
+			c.masqueProxy = &EnvoyMasqueProxy{
+				UpstreamServer: c.MasqueHost,
+				UpstreamPort: c.MasquePort,
+				ListenPort: c.masqueListenPort,
+
+				insecure: false,
+				token: c.MasqueProxyToken,
+			}
+
+			c.masqueRunning = true
+			go c.masqueProxy.Start()
+		}
+
 	default:
 		// at the moment, everything else is in lyrebird
 		t := transports.Get(methodName)
@@ -931,6 +1076,24 @@ func (c *Controller) Stop(methodName string) {
 			ptlog.Warnf("No listener for %s", methodName)
 		}
 
+	case EnvoyEch:
+		if c.echProxyRunning {
+			ptlog.Noticef("Shutting down %s", methodName)
+			go c.echProxy.Stop()
+			c.echProxyRunning = false
+		} else {
+			ptlog.Warnf("No listener for %s", methodName)
+		}
+
+	case Masque:
+		if c.echProxyRunning {
+			ptlog.Noticef("Shutting down %s", methodName)
+			go c.masqueProxy.Stop()
+			c.masqueRunning = false
+		} else {
+			ptlog.Warnf("No listener for %s", methodName)
+		}
+
 	default:
 		if ln, ok := c.listeners[methodName]; ok {
 			_ = ln.Close()
@@ -960,6 +1123,18 @@ func LyrebirdVersion() string {
 	return "lyrebird-0.6.0"
 }
 
+// SetDOHServer - set the default Go resolver to use DNS over HTTPS with our
+// working server
+func  SetDOHServer(dohServer string) {
+	log.Printf("Setting default Go DNS resolver to use DOH: %s", dohServer)
+	doh_url := "https://" + dohServer + "/dns-query{?dns}"
+	resolver, r_err := ndns.NewDoHResolver(doh_url)
+	if r_err != nil {
+		log.Fatalf("Failed to make a resolver: %s", r_err)
+	}
+	net.DefaultResolver = resolver
+}
+
 func findPort(port int) int {
 	temp := port
 
@@ -982,4 +1157,34 @@ func isPortAvailable(port int) bool {
 	}
 	l.Close()
 	return true
+}
+
+///
+// Attempt a basic TCP connection to see if a service is up yet
+// blocks and polls until the connection is made
+//
+// XXX this probably should have some kind of timeout for the service
+// failing to start
+//
+func isItUpYet(addr string) (bool, error) {
+
+	var d net.Dialer
+
+	// poll every 2 seconds until the service is listening
+	up := false
+	for !up {
+		ctx, cancel := context.WithTimeout(context.Background(), 2 * time.Second)
+		conn, err := d.DialContext(ctx, "tcp", addr)
+		// This can throw timeout and connection refused... probably more
+		// just ignore it all ;-)
+		if err == nil {
+			conn.Close()
+			cancel()
+			return true, nil
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return false, nil
 }
