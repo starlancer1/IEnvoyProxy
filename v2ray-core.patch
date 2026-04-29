@@ -2,10 +2,10 @@
  app/tun/packetparse/udp_stub.go        |  25 ++
  common/protofilter/filter.go           |   9 +-
  domain2ip.go                           |  40 ++++
- envoy/v2ray.go                         | 419 +++++++++++++++++++++++++++++++++
+ envoy/v2ray.go                         | 430 +++++++++++++++++++++++++++++++++
  transport/internet/http/dialer.go      |  23 +-
- transport/internet/websocket/dialer.go |  19 +-
- 7 files changed, 532 insertions(+), 6 deletions(-)
+ transport/internet/websocket/dialer.go |  21 +-
+ 7 files changed, 544 insertions(+), 7 deletions(-)
 
 diff --git a/app/tun/packetparse/udp.go b/app/tun/packetparse/udp.go
 index 8e5cdd19..4f3f258f 100644
