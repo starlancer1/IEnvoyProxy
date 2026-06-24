@@ -592,6 +592,18 @@ index 8a9da0e4..c957e408 100644
  			if err != nil {
  				return nil, err
  			}
+diff --git a/transport/internet/system_dns_android.go b/transport/internet/system_dns_android.go
+index 9cdd42a..52851dd 100644
+--- a/transport/internet/system_dns_android.go
++++ b/transport/internet/system_dns_android.go
+@@ -33,5 +33,6 @@ var NewDNSResolver DNSResolverFunc = func() *net.Resolver {
+ }
+ 
+ func init() {
+-	net.DefaultResolver = NewDNSResolver()
++	// GFVPN patch: do NOT override net.DefaultResolver on Android.
++	// net.DefaultResolver = NewDNSResolver()
+ }
 diff --git a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
 index 3fb229f..9deea95 100644
 --- a/transport/internet/websocket/dialer.go
