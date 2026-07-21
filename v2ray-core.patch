@@ -1,14 +1,5 @@
- app/tun/packetparse/udp.go             |   3 +
- app/tun/packetparse/udp_stub.go        |  25 ++
- common/protofilter/filter.go           |   9 +-
- domain2ip.go                           |  40 ++++
- envoy/v2ray.go                         | 430 +++++++++++++++++++++++++++++++++
- transport/internet/http/dialer.go      |  23 +-
- transport/internet/websocket/dialer.go |  21 +-
- 7 files changed, 544 insertions(+), 7 deletions(-)
-
 diff --git a/app/tun/packetparse/udp.go b/app/tun/packetparse/udp.go
-index 8e5cdd19..4f3f258f 100644
+index 8e5cdd1..4f3f258 100644
 --- a/app/tun/packetparse/udp.go
 +++ b/app/tun/packetparse/udp.go
 @@ -1,3 +1,6 @@
@@ -20,7 +11,7 @@ index 8e5cdd19..4f3f258f 100644
  import (
 diff --git a/app/tun/packetparse/udp_stub.go b/app/tun/packetparse/udp_stub.go
 new file mode 100644
-index 00000000..d8677a37
+index 0000000..d8677a3
 --- /dev/null
 +++ b/app/tun/packetparse/udp_stub.go
 @@ -0,0 +1,25 @@
@@ -50,7 +41,7 @@ index 00000000..d8677a37
 +	return nil, newError("packet parsing disabled - build with 'with_packetparse' tag to enable")
 +}
 diff --git a/common/protofilter/filter.go b/common/protofilter/filter.go
-index 521d0d1c..718ed0ea 100644
+index 521d0d1..718ed0e 100644
 --- a/common/protofilter/filter.go
 +++ b/common/protofilter/filter.go
 @@ -39,9 +39,12 @@ func filterMessage(ctx context.Context, message protoreflect.Message) error {
@@ -71,7 +62,7 @@ index 521d0d1c..718ed0ea 100644
  
 diff --git a/domain2ip.go b/domain2ip.go
 new file mode 100644
-index 00000000..da1ad5c6
+index 0000000..da1ad5c
 --- /dev/null
 +++ b/domain2ip.go
 @@ -0,0 +1,40 @@
@@ -117,10 +108,10 @@ index 00000000..da1ad5c6
 +}
 diff --git a/envoy/v2ray.go b/envoy/v2ray.go
 new file mode 100644
-index 0000000..34a5a18
+index 0000000..d4016fd
 --- /dev/null
 +++ b/envoy/v2ray.go
-@@ -0,0 +1,430 @@
+@@ -0,0 +1,466 @@
 +package v2ray
 +
 +// copied and modified from main/commands/run.go
@@ -147,6 +138,7 @@ index 0000000..34a5a18
 +
 +	core "github.com/v2fly/v2ray-core/v5"
 +	_ "github.com/v2fly/v2ray-core/v5/main/distro/all"
++	sockssimple "github.com/v2fly/v2ray-core/v5/proxy/socks/simplified"
 +)
 +
 +const jsonV5 = "jsonv5"
@@ -159,17 +151,38 @@ index 0000000..34a5a18
 +// getInbound
 +//
 +// @param port - port to listen for SOCKS5 connections
++//
++// Always binds 127.0.0.1 (never AnyIP) and disables classic SOCKS UDP ASSOCIATE
++// so local/LAN scanners cannot abuse the inbound.
++//
++// Auth cannot be expressed in jsonv5 simplified socks settings (no auth/accounts
++// fields). Call applyForcedSocksAuth before startServer instead.
 +func getInbound(clientPort int) string {
 +	return fmt.Sprintf(`
 +      {
++        "listen": "127.0.0.1",
 +        "port": %d,
 +        "protocol": "socks",
 +        "sniffing": {
 +          "enabled": true,
 +          "destOverride": ["http", "tls"]
 +        },
-+        "settings": {}
++        "settings": {
++          "address": "127.0.0.1",
++          "udpEnabled": false
++        }
 +      }`, clientPort)
++}
++
++// applyForcedSocksAuth injects session credentials into the simplified socks
++// inbound builder (see proxy/socks/simplified). Safe across parallel probes:
++// all gfvpn sessions share one secret.
++func applyForcedSocksAuth(socksUser, socksPass string) {
++	if socksUser != "" && socksPass != "" {
++		sockssimple.SetForcedAccounts(map[string]string{socksUser: socksPass})
++		return
++	}
++	sockssimple.SetForcedAccounts(nil)
 +}
 +
 +func getWsConfig(clientPort int, serverAddress, serverWsPort, wsPath, id string, allowInsecure bool, serverName string, hostName string, utlsFingerprint string) string {
@@ -348,6 +361,9 @@ index 0000000..34a5a18
 +	ServerName      string
 +	Hostname        string
 +	UtlsFingerprint string
++	// SocksUser / SocksPass protect the local SOCKS5 inbound (loopback).
++	SocksUser string
++	SocksPass string
 +}
 +
 +// HttpConfigOptional - optional configuration for HTTP/2 transport
@@ -356,6 +372,9 @@ index 0000000..34a5a18
 +	ServerName      string
 +	Hostname        string
 +	UtlsFingerprint string
++	// SocksUser / SocksPass protect the local SOCKS5 inbound (loopback).
++	SocksUser string
++	SocksPass string
 +}
 +
 +// StartWs - start v2ray, websocket transport
@@ -381,6 +400,7 @@ index 0000000..34a5a18
 +	serverName := serverAddress
 +	hostName := serverAddress
 +	utlsFingerprint := "chrome_auto"
++	socksUser, socksPass := "", ""
 +
 +	// Override with provided config if any
 +	if len(config) > 0 {
@@ -395,8 +415,11 @@ index 0000000..34a5a18
 +		if cfg.UtlsFingerprint != "" {
 +			utlsFingerprint = cfg.UtlsFingerprint
 +		}
++		socksUser = cfg.SocksUser
++		socksPass = cfg.SocksPass
 +	}
 +
++	applyForcedSocksAuth(socksUser, socksPass)
 +	server, err := startServer(getWsConfig(clientPort, serverAddress, serverPort, wsPath, id, allowInsecure, serverName, hostName, utlsFingerprint))
 +	if err != nil {
 +		return err
@@ -443,6 +466,7 @@ index 0000000..34a5a18
 +	serverName := serverAddress
 +	hostName := serverAddress
 +	utlsFingerprint := "chrome_auto"
++	socksUser, socksPass := "", ""
 +
 +	// Override with provided config if any
 +	if len(config) > 0 {
@@ -457,8 +481,11 @@ index 0000000..34a5a18
 +		if cfg.UtlsFingerprint != "" {
 +			utlsFingerprint = cfg.UtlsFingerprint
 +		}
++		socksUser = cfg.SocksUser
++		socksPass = cfg.SocksPass
 +	}
 +
++	applyForcedSocksAuth(socksUser, socksPass)
 +	server, err := startServer(getHttpConfig(clientPort, serverAddress, serverPort, httpPath, id, allowInsecure, serverName, hostName, utlsFingerprint))
 +	if err != nil {
 +		return err
@@ -551,8 +578,67 @@ index 0000000..34a5a18
 +		return true
 +	})
 +}
+diff --git a/proxy/socks/simplified/config.go b/proxy/socks/simplified/config.go
+index 70195aa..a53691f 100644
+--- a/proxy/socks/simplified/config.go
++++ b/proxy/socks/simplified/config.go
+@@ -2,17 +2,53 @@ package simplified
+ 
+ import (
+ 	"context"
++	"sync"
+ 
+ 	"github.com/v2fly/v2ray-core/v5/common"
+ 	"github.com/v2fly/v2ray-core/v5/common/protocol"
+ 	"github.com/v2fly/v2ray-core/v5/proxy/socks"
+ )
+ 
++// #GFVPN: jsonv5 socks inbound uses this simplified ServerConfig, which has no
++// auth/accounts fields (upstream hardcodes NO_AUTH). Session SOCKS credentials
++// are injected here before startServer via SetForcedAccounts.
++var (
++	forcedAccountsMu sync.RWMutex
++	forcedAccounts   map[string]string
++)
++
++// SetForcedAccounts sets username/password accounts for the next socks inbound
++// built from simplified config. Pass nil or empty to clear (no auth).
++func SetForcedAccounts(accounts map[string]string) {
++	forcedAccountsMu.Lock()
++	defer forcedAccountsMu.Unlock()
++	if len(accounts) == 0 {
++		forcedAccounts = nil
++		return
++	}
++	forcedAccounts = make(map[string]string, len(accounts))
++	for user, pass := range accounts {
++		forcedAccounts[user] = pass
++	}
++}
++
+ func init() {
+ 	common.Must(common.RegisterConfig((*ServerConfig)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
+ 		simplifiedServer := config.(*ServerConfig)
++		authType := socks.AuthType_NO_AUTH
++		var accounts map[string]string
++		forcedAccountsMu.RLock()
++		if len(forcedAccounts) > 0 {
++			authType = socks.AuthType_PASSWORD
++			accounts = make(map[string]string, len(forcedAccounts))
++			for user, pass := range forcedAccounts {
++				accounts[user] = pass
++			}
++		}
++		forcedAccountsMu.RUnlock()
+ 		fullServer := &socks.ServerConfig{
+-			AuthType:       socks.AuthType_NO_AUTH,
++			AuthType:       authType,
++			Accounts:       accounts,
+ 			Address:        simplifiedServer.Address,
+ 			UdpEnabled:     simplifiedServer.UdpEnabled,
+ 			PacketEncoding: simplifiedServer.PacketEncoding,
 diff --git a/transport/internet/http/dialer.go b/transport/internet/http/dialer.go
-index 8a9da0e4..c957e408 100644
+index 8a9da0e..c957e40 100644
 --- a/transport/internet/http/dialer.go
 +++ b/transport/internet/http/dialer.go
 @@ -59,6 +59,23 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se

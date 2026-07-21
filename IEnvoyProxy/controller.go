@@ -158,6 +158,13 @@ type Controller struct {
 	// MeekLiteTubeSocksPassword - Password which TubeSocks should use to start MeekLite with.
 	MeekLiteTubeSocksPassword string
 
+	// LocalSocksUser / LocalSocksPass protect local SOCKS5 inbounds for
+	// V2Ray / XRay / Hysteria2. When both are non-empty, those transports
+	// require SOCKS5 username/password auth on their loopback listeners.
+	// Set by gfvpn-client to the per-session secret shared with the LB.
+	LocalSocksUser string
+	LocalSocksPass string
+
 	// V2RayServerAddress - Hostname of WS web server proxy
 	V2RayServerAddress string
 
@@ -733,6 +740,8 @@ func (c *Controller) Start(methodName string, proxy string) error {
 				ServerName:      c.V2RayServerName,
 				Hostname:        c.V2RayHostname,
 				UtlsFingerprint: c.V2RayUtlsFingerprint,
+				SocksUser:       c.LocalSocksUser,
+				SocksPass:       c.LocalSocksPass,
 			})
 			if err != nil {
 				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
@@ -777,6 +786,8 @@ func (c *Controller) Start(methodName string, proxy string) error {
 				ServerName:      c.V2RayServerName,
 				Hostname:        c.V2RayHostname,
 				UtlsFingerprint: c.V2RayUtlsFingerprint,
+				SocksUser:       c.LocalSocksUser,
+				SocksPass:       c.LocalSocksPass,
 			})
 			if err != nil {
 				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
@@ -796,6 +807,8 @@ func (c *Controller) Start(methodName string, proxy string) error {
 				Hostname:      c.XRayHostname,
 				XhttpMode:     c.XRayXhttpMode,
 				XhttpVersion:  c.XRayXhttpVersion,
+				SocksUser:     c.LocalSocksUser,
+				SocksPass:     c.LocalSocksPass,
 			})
 			if err != nil {
 				ptlog.Errorf("Failed to initialize %s: %s", methodName, err)
@@ -811,8 +824,14 @@ func (c *Controller) Start(methodName string, proxy string) error {
 
 			configFile := fmt.Sprintf("%s/hysteria.yaml", c.stateDir)
 
-			// Build complete configuration
-			fullConfig := fmt.Sprintf("server: %s\n\nsocks5:\n  listen: 127.0.0.1:%d\n", c.Hysteria2Server, c.hysteria2Port)
+			// Build complete configuration. Local SOCKS5 is loopback-only;
+			// disableUDP closes the classic UDP-ASSOCIATE hole; username/password
+			// (when set) require auth matching gfvpn-client's session secret.
+			fullConfig := fmt.Sprintf("server: %s\n\nsocks5:\n  listen: 127.0.0.1:%d\n  disableUDP: true\n", c.Hysteria2Server, c.hysteria2Port)
+			if c.LocalSocksUser != "" && c.LocalSocksPass != "" {
+				// Hex session secrets need no YAML quoting.
+				fullConfig += fmt.Sprintf("  username: %s\n  password: %s\n", c.LocalSocksUser, c.LocalSocksPass)
+			}
 
 			// Add bandwidth configuration if provided
 			if c.Hysteria2BandwidthUp != "" || c.Hysteria2BandwidthDown != "" {

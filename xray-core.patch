@@ -1,6 +1,6 @@
 diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 --- a/core/domain2ip.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/core/domain2ip.go	2026-02-23 16:54:12.830250167 +0000
++++ b/core/domain2ip.go	2026-07-11 05:11:07.775655570 +0000
 @@ -0,0 +1,40 @@
 +package core
 +
@@ -44,8 +44,8 @@ diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 +}
 diff -Naur a/envoy/xray.go b/envoy/xray.go
 --- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/envoy/xray.go	2026-04-27 11:54:21.346086194 +0000
-@@ -0,0 +1,267 @@
++++ b/envoy/xray.go	2026-07-21 02:51:08.319962412 +0000
+@@ -0,0 +1,290 @@
 +package xray
 +
 +// copied and modified from main/commands/run.go
@@ -81,20 +81,37 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +// getInbound
 +//
 +// @param port - port to listen for SOCKS5 connections
-+func getInbound(clientPort int) string {
++// @param socksUser / socksPass - when both non-empty, require SOCKS5 user/pass auth.
++//
++// Always binds 127.0.0.1 (never AnyIP) and disables classic SOCKS UDP ASSOCIATE
++// so local/LAN scanners cannot abuse the inbound.
++func getInbound(clientPort int, socksUser, socksPass string) string {
++	var settings string
++	if socksUser != "" && socksPass != "" {
++		settings = fmt.Sprintf(`{
++          "auth": "password",
++          "udp": false,
++          "accounts": [{"user": %q, "pass": %q}]
++        }`, socksUser, socksPass)
++	} else {
++		settings = `{
++          "udp": false
++        }`
++	}
 +	return fmt.Sprintf(`
 +      {
++        "listen": "127.0.0.1",
 +        "port": %d,
 +        "protocol": "socks",
 +        "sniffing": {
 +          "enabled": true,
 +          "destOverride": ["http", "tls"]
 +        },
-+        "settings": {}
-+      }`, clientPort)
++        "settings": %s
++      }`, clientPort, settings)
 +}
 +
-+func getXrxhConfig(clientPort int, serverAddress, serverPort, xhttpPath, id string, allowInsecure bool, serverName string, hostName string, xhttpMode string, xhttpVersion string) string {
++func getXrxhConfig(clientPort int, serverAddress, serverPort, xhttpPath, id string, allowInsecure bool, serverName string, hostName string, xhttpMode string, xhttpVersion, socksUser, socksPass string) string {
 +	if xhttpVersion == "h2" {
 +		return fmt.Sprintf(`
 +  {
@@ -136,7 +153,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +        }
 +      }
 +    ]
-+  }`, getInbound(clientPort), serverAddress, serverPort, id, hostName, xhttpPath, xhttpMode, serverName, allowInsecure)
++  }`, getInbound(clientPort, socksUser, socksPass), serverAddress, serverPort, id, hostName, xhttpPath, xhttpMode, serverName, allowInsecure)
 +	} else if xhttpVersion == "h3" {
 +		return fmt.Sprintf(`
 +  {
@@ -205,7 +222,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +        }
 +      }
 +    ]
-+  }`, getInbound(clientPort), serverAddress, serverPort, id, hostName, xhttpPath, xhttpMode, serverAddress, serverPort, hostName, xhttpPath, serverName, allowInsecure, serverName, allowInsecure)
++  }`, getInbound(clientPort, socksUser, socksPass), serverAddress, serverPort, id, hostName, xhttpPath, xhttpMode, serverAddress, serverPort, hostName, xhttpPath, serverName, allowInsecure, serverName, allowInsecure)
 +	} else {
 +		return ""
 +	}
@@ -245,6 +262,9 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +	Hostname      string
 +	XhttpMode     string
 +	XhttpVersion  string
++	// SocksUser / SocksPass protect the local SOCKS5 inbound (loopback).
++	SocksUser string
++	SocksPass string
 +}
 +
 +// StartXrxh - start Xray with XHTTP transport via HTTP/2 or HTTP/1.1
@@ -270,6 +290,7 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +	// Defaults to HTTP/2
 +	xhttpMode := "stream-one"
 +	xhttpVersion := "h2"
++	socksUser, socksPass := "", ""
 +
 +	// Override with provided config if any
 +	if len(config) > 0 {
@@ -289,9 +310,11 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +			// Can be either h2 or h3
 +			xhttpVersion = cfg.XhttpVersion
 +		}
++		socksUser = cfg.SocksUser
++		socksPass = cfg.SocksPass
 +	}
 +
-+	server, err := startServer(getXrxhConfig(clientPort, serverAddress, serverPort, xhttpPath, id, allowInsecure, serverName, hostName, xhttpMode, xhttpVersion))
++	server, err := startServer(getXrxhConfig(clientPort, serverAddress, serverPort, xhttpPath, id, allowInsecure, serverName, hostName, xhttpMode, xhttpVersion, socksUser, socksPass))
 +	if err != nil {
 +		return err
 +	}
@@ -314,8 +337,8 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +	})
 +}
 diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
---- a/proxy/wireguard/tun.go	2025-10-14 20:23:35.482996098 +0000
-+++ b/proxy/wireguard/tun.go	2026-02-23 16:54:12.830250167 +0000
+--- a/proxy/wireguard/tun.go	2026-06-19 08:15:14.931779148 +0000
++++ b/proxy/wireguard/tun.go	2026-07-11 05:11:07.775655570 +0000
 @@ -194,7 +194,7 @@
  					Timeout: 15 * time.Second,
  				})
@@ -326,8 +349,8 @@ diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
  		})
  		stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
---- a/transport/internet/splithttp/dialer.go	2025-10-14 20:23:35.490996211 +0000
-+++ b/transport/internet/splithttp/dialer.go	2026-02-23 16:54:12.830250167 +0000
+--- a/transport/internet/splithttp/dialer.go	2026-06-19 08:15:14.939779235 +0000
++++ b/transport/internet/splithttp/dialer.go	2026-07-11 05:11:07.775655570 +0000
 @@ -21,6 +21,7 @@
  	"github.com/xtls/xray-core/common/net"
  	"github.com/xtls/xray-core/common/signal/done"
@@ -437,8 +460,8 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		requestURL2.Path = config2.GetNormalizedPath() + sessionIdUuid.String()
  		requestURL2.RawQuery = config2.GetNormalizedQuery()
 diff -Naur a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
---- a/transport/internet/websocket/dialer.go	2025-10-14 20:23:35.490996211 +0000
-+++ b/transport/internet/websocket/dialer.go	2026-02-23 16:54:12.830250167 +0000
+--- a/transport/internet/websocket/dialer.go	2026-06-19 08:15:14.943779278 +0000
++++ b/transport/internet/websocket/dialer.go	2026-07-11 05:11:07.779655649 +0000
 @@ -53,7 +53,7 @@
  		},
  		ReadBufferSize:   4 * 1024,
