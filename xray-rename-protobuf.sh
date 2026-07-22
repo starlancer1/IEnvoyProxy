@@ -11,6 +11,14 @@ set -e
 
 # Function to install protoc and plugins if missing
 install_protoc() {
+    # go install puts plugins in GOPATH/bin (or GOBIN); protoc looks them up via PATH.
+    local go_bin
+    go_bin="$(go env GOBIN 2>/dev/null)"
+    if [ -z "$go_bin" ]; then
+        go_bin="$(go env GOPATH)/bin"
+    fi
+    export PATH="${go_bin}:${PATH}"
+
     # Ensure protoc is installed
     if ! command -v protoc &>/dev/null; then
         echo "Installing protoc..."
@@ -39,7 +47,7 @@ install_protoc() {
         go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
     fi
     
-    echo "✓ protoc ready (version: $(protoc --version | cut -d' ' -f2))"
+    echo "✓ protoc ready (version: $(protoc --version | cut -d' ' -f2); plugins in ${go_bin})"
 }
 
 # Install protoc and plugins if needed
