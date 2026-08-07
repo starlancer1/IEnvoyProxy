@@ -1,5 +1,5 @@
 diff --git a/app/cmd/client.go b/app/cmd/client.go
-index 65bc7e0..2563f7b 100644
+index 65bc7e0..f689636 100644
 --- a/app/cmd/client.go
 +++ b/app/cmd/client.go
 @@ -14,6 +14,7 @@ import (
@@ -21,7 +21,7 @@ index 65bc7e0..2563f7b 100644
  )
  
  var clientCmd = &cobra.Command{
-@@ -445,11 +448,12 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -445,13 +448,22 @@ func runClient(cmd *cobra.Command, args []string) {
  	logger.Info("client mode")
  
  	if err := viper.ReadInConfig(); err != nil {
@@ -35,8 +35,18 @@ index 65bc7e0..2563f7b 100644
 +		logger.Error("failed to parse client config", zap.Error(err))
  	}
  
++	runClientWithConfig(config)
++}
++
++// runClientWithConfig runs the Hysteria client from an already-parsed config.
++// Used by the CLI path (after global viper load) and by Start() (after an
++// isolated viper.New() load) so concurrent in-process Starts do not share
++// config state.
++func runClientWithConfig(config clientConfig) {
  	c, err := client.NewReconnectableClient(
-@@ -465,7 +469,8 @@ func runClient(cmd *cobra.Command, args []string) {
+ 		config.Config,
+ 		func(c client.Client, info *client.HandshakeInfo, count int) {
+@@ -465,7 +477,8 @@ func runClient(cmd *cobra.Command, args []string) {
  			}
  		}, config.Lazy)
  	if err != nil {
@@ -46,7 +56,7 @@ index 65bc7e0..2563f7b 100644
  	}
  	defer c.Close()
  
-@@ -536,14 +541,35 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -536,14 +549,35 @@ func runClient(cmd *cobra.Command, args []string) {
  		} else {
  			_ = c.Close() // Close the client here as Fatal will exit the program without running defer
  			if r.Err != nil {
@@ -84,7 +94,7 @@ index 65bc7e0..2563f7b 100644
  type clientModeRunner struct {
  	ModeMap map[string]func() error
  }
-@@ -612,6 +638,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
+@@ -612,6 +646,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
  		EventLogger: &socks5Logger{},
  	}
  	logger.Info("SOCKS5 server listening", zap.String("addr", config.Listen))
@@ -145,22 +155,58 @@ index db45052..ca802c1 100644
  	defer conn.Close()
  
 diff --git a/app/cmd/root.go b/app/cmd/root.go
-index 13f9705..1176e72 100644
+index 13f9705..cf929c3 100644
 --- a/app/cmd/root.go
 +++ b/app/cmd/root.go
-@@ -105,6 +105,25 @@ func Execute() {
+@@ -5,6 +5,7 @@ import (
+ 	"os"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 
+ 	"github.com/spf13/cobra"
+ 	"github.com/spf13/viper"
+@@ -105,6 +106,53 @@ func Execute() {
  	}
  }
  
-+func Start(configPath string) {
-+	args := []string{"--disable-update-check"}
++// startLoggerOnce ensures initLogger runs once when Start bypasses cobra.Execute
++// (which normally runs OnInitialize). Concurrent Starts must not share the
++// process-global viper singleton — each uses viper.New() below.
++var startLoggerOnce sync.Once
 +
-+	if configPath != "" {
-+		args = append(args, "--config", configPath)
++// Start loads configPath with an isolated viper instance and runs the client.
++// Unlike Execute(), this is safe for concurrent in-process Hysteria clients
++// (gfvpn-client probe pool): each Start gets its own config parse, so parallel
++// probes cannot clobber each other's server/listen settings.
++func Start(configPath string) {
++	disableUpdateCheck = true
++	startLoggerOnce.Do(initLogger)
++
++	if configPath == "" {
++		if logger != nil {
++			logger.Error("Start: config path is empty")
++		}
++		return
 +	}
 +
-+	rootCmd.SetArgs(args)
-+	_ = rootCmd.Execute()
++	v := viper.New()
++	v.SetConfigFile(configPath)
++	if err := v.ReadInConfig(); err != nil {
++		if logger != nil {
++			logger.Error("failed to read client config", zap.Error(err))
++		}
++		return
++	}
++	var config clientConfig
++	if err := v.Unmarshal(&config); err != nil {
++		if logger != nil {
++			logger.Error("failed to parse client config", zap.Error(err))
++		}
++		return
++	}
++
++	runClientWithConfig(config)
 +}
 +
 +func Stop() {
@@ -174,7 +220,7 @@ index 13f9705..1176e72 100644
  func init() {
  	initFlags()
  	cobra.MousetrapHelpText = "" // Disable the mousetrap so Windows users can run the exe directly by double-clicking
-@@ -136,12 +155,12 @@ func initLogger() {
+@@ -136,12 +184,12 @@ func initLogger() {
  	level, ok := logLevelMap[strings.ToLower(logLevel)]
  	if !ok {
  		fmt.Printf("unsupported log level: %s\n", logLevel)
@@ -189,7 +235,7 @@ index 13f9705..1176e72 100644
  	}
  	c := zap.Config{
  		Level:             zap.NewAtomicLevelAt(level),
-@@ -156,7 +175,7 @@ func initLogger() {
+@@ -156,7 +204,7 @@ func initLogger() {
  	logger, err = c.Build()
  	if err != nil {
  		fmt.Printf("failed to initialize logger: %s\n", err)
