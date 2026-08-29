@@ -10,7 +10,11 @@ index 53db62b..bdf944e 100644
  	"io"
  	"io/ioutil"
  	"log"
-@@ -18,6 +17,8 @@ import (
+@@ -16,9 +15,12 @@ import (
+ 	"os"
+ 	"os/signal"
++	"runtime"
+ 	"sync"
  	"syscall"
  	"time"
  
@@ -82,7 +86,23 @@ index 53db62b..bdf944e 100644
  				_ = conn.Close()
  			}()
  
-@@ -327,7 +331,7 @@ func AcceptLoop(ln *pt.SocksListener, utlsClientHelloID *utls.ClientHelloID, shu
+@@ -302,6 +307,14 @@ func AcceptLoop(ln *pt.SocksListener, utlsClientHelloID *utls.ClientHelloID, shu
+ 			smuxConfig := smux.DefaultConfig()
+ 			smuxConfig.Version = 2
+ 			smuxConfig.KeepAliveTimeout = idleTimeout
+-			smuxConfig.MaxStreamBuffer = 1 * 1024 * 1024 // default is 65536
++			// Upstream uses 1 MiB/stream and the 4 MiB session default.
++			// On iOS each SOCKS accept is a full DNSTT session; a speedtest
++			// fills those windows far faster than DNS can drain them and
++			// jetsams the 50 MB Network Extension. Android/others unchanged.
++			smuxConfig.MaxStreamBuffer = 1 * 1024 * 1024 // default is 65536
++			if runtime.GOOS == "ios" {
++				smuxConfig.MaxStreamBuffer = 64 * 1024
++				smuxConfig.MaxReceiveBuffer = 256 * 1024
++			}
+ 			sess, err := smux.Client(rw, smuxConfig)
+ 			if err != nil {
+@@ -327,7 +339,7 @@ func AcceptLoop(ln *pt.SocksListener, utlsClientHelloID *utls.ClientHelloID, shu
  			go func() {
  				defer close(handler)
  
