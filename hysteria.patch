@@ -1,5 +1,5 @@
 diff --git a/app/cmd/client.go b/app/cmd/client.go
-index 65bc7e0..f689636 100644
+index 65bc7e0..f899ce8 100644
 --- a/app/cmd/client.go
 +++ b/app/cmd/client.go
 @@ -14,6 +14,7 @@ import (
@@ -21,7 +21,28 @@ index 65bc7e0..f689636 100644
  )
  
  var clientCmd = &cobra.Command{
-@@ -445,13 +448,22 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -227,12 +230,18 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
+ 	case "", "udp":
+ 		if hyConfig.ServerAddr.Network() == "udphop" {
+ 			hopAddr := hyConfig.ServerAddr.(*udphop.UDPHopAddr)
++			listenUDP := so.ListenUDP
++			if hopAddr.IP != nil && hopAddr.IP.To4() == nil {
++				listenUDP = func() (net.PacketConn, error) {
++					return so.ListenUDPTo(&net.UDPAddr{IP: hopAddr.IP})
++				}
++			}
+ 			newFunc = func(addr net.Addr) (net.PacketConn, error) {
+-				return udphop.NewUDPHopPacketConn(hopAddr, c.Transport.UDP.HopInterval, so.ListenUDP)
++				return udphop.NewUDPHopPacketConn(hopAddr, c.Transport.UDP.HopInterval, listenUDP)
+ 			}
+ 		} else {
+ 			newFunc = func(addr net.Addr) (net.PacketConn, error) {
+-				return so.ListenUDP()
++				return so.ListenUDPTo(addr)
+ 			}
+ 		}
+ 	default:
+@@ -445,13 +454,22 @@ func runClient(cmd *cobra.Command, args []string) {
  	logger.Info("client mode")
  
  	if err := viper.ReadInConfig(); err != nil {
@@ -46,7 +67,7 @@ index 65bc7e0..f689636 100644
  	c, err := client.NewReconnectableClient(
  		config.Config,
  		func(c client.Client, info *client.HandshakeInfo, count int) {
-@@ -465,7 +477,8 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -465,7 +483,8 @@ func runClient(cmd *cobra.Command, args []string) {
  			}
  		}, config.Lazy)
  	if err != nil {
@@ -56,7 +77,7 @@ index 65bc7e0..f689636 100644
  	}
  	defer c.Close()
  
-@@ -536,14 +549,35 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -536,14 +555,35 @@ func runClient(cmd *cobra.Command, args []string) {
  		} else {
  			_ = c.Close() // Close the client here as Fatal will exit the program without running defer
  			if r.Err != nil {
@@ -94,7 +115,7 @@ index 65bc7e0..f689636 100644
  type clientModeRunner struct {
  	ModeMap map[string]func() error
  }
-@@ -612,6 +646,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
+@@ -612,6 +652,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
  		EventLogger: &socks5Logger{},
  	}
  	logger.Info("SOCKS5 server listening", zap.String("addr", config.Listen))
@@ -383,6 +404,40 @@ index 11eadd0..43f8d86 100644
  	}
  	if resp.HasUpdate {
  		logger.Info("update available",
+diff --git a/app/internal/sockopts/sockopts.go b/app/internal/sockopts/sockopts.go
+index 14ee0c0..4535f7f 100644
+--- a/app/internal/sockopts/sockopts.go
++++ b/app/internal/sockopts/sockopts.go
+@@ -39,8 +39,27 @@ func (e *UnsupportedError) Error() string {
+ 	return fmt.Sprintf("%s is not supported on this platform", e.Field)
+ }
+ 
+-func (o *SocketOptions) ListenUDP() (uconn net.PacketConn, err error) {
+-	uconn, err = net.ListenUDP("udp", nil)
++func (o *SocketOptions) ListenUDP() (net.PacketConn, error) {
++	return o.listenUDP("udp")
++}
++
++// ListenUDPTo binds a UDP socket in the address family of dest.
++// net.ListenUDP("udp", nil) is often IPv4-only on Android/iOS, which
++// makes QUIC to an IPv6 Hysteria server fail. IPv6 destinations therefore
++// use "udp6", matching extras/outbounds/ob_direct.go.
++func (o *SocketOptions) ListenUDPTo(dest net.Addr) (net.PacketConn, error) {
++	return o.listenUDP(udpNetworkForAddr(dest))
++}
++
++func udpNetworkForAddr(addr net.Addr) string {
++	if u, ok := addr.(*net.UDPAddr); ok && u.IP != nil && u.IP.To4() == nil {
++		return "udp6"
++	}
++	return "udp"
++}
++
++func (o *SocketOptions) listenUDP(network string) (uconn net.PacketConn, err error) {
++	uconn, err = net.ListenUDP(network, nil)
+ 	if err != nil {
+ 		return
+ 	}
 diff --git a/app/internal/socks5/server.go b/app/internal/socks5/server.go
 index 0fc7de6..7a00aec 100644
 --- a/app/internal/socks5/server.go
