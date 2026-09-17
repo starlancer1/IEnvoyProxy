@@ -822,9 +822,10 @@ func (c *Controller) Start(methodName string, proxy string) error {
 		if !c.hysteria2Running {
 			c.hysteria2Port = findPort(c.hysteria2Port)
 
-			configFile := fmt.Sprintf("%s/hysteria.yaml", c.stateDir)
+			// Drop leftover on-disk YAML from older clients (server URI / auth / SNI).
+			_ = os.Remove(fmt.Sprintf("%s/hysteria.yaml", c.stateDir))
 
-			// Build complete configuration. Local SOCKS5 is loopback-only;
+			// Build complete configuration in memory. Local SOCKS5 is loopback-only;
 			// disableUDP closes the classic UDP-ASSOCIATE hole; username/password
 			// (when set) require auth matching gfvpn-client's session secret.
 			fullConfig := fmt.Sprintf("server: %s\n\nsocks5:\n  listen: 127.0.0.1:%d\n  disableUDP: true\n", c.Hysteria2Server, c.hysteria2Port)
@@ -871,16 +872,9 @@ func (c *Controller) Start(methodName string, proxy string) error {
 				}
 			}
 
-			// Write complete configuration to file once
-			err = os.WriteFile(configFile, []byte(fullConfig), 0644)
-			if err != nil {
-				ptlog.Errorf("Could not write config file: %s\n", err.Error())
-				return err
-			}
-
 			c.hysteria2Running = true
 
-			go hysteria2.Start(configFile)
+			go hysteria2.Start([]byte(fullConfig))
 
 			// Need to sleep a little here, to give Hysteria2 a chance to start.
 			// Otherwise, Hysteria2 wouldn't be listening
@@ -1089,6 +1083,7 @@ func (c *Controller) Stop(methodName string) {
 			ptlog.Noticef("Shutting down %s", methodName)
 			listenAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(c.hysteria2Port))
 			go hysteria2.StopByAddress(listenAddr)
+			// Older clients wrote plaintext hysteria.yaml; drop leftovers if present.
 			_ = os.Remove(fmt.Sprintf("%s/hysteria.yaml", c.stateDir))
 			c.hysteria2Running = false
 		} else {

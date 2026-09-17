@@ -1,5 +1,5 @@
 diff --git a/app/cmd/client.go b/app/cmd/client.go
-index 65bc7e0..f899ce8 100644
+index 65bc7e0..0b44955 100644
 --- a/app/cmd/client.go
 +++ b/app/cmd/client.go
 @@ -14,6 +14,7 @@ import (
@@ -61,8 +61,8 @@ index 65bc7e0..f899ce8 100644
 +
 +// runClientWithConfig runs the Hysteria client from an already-parsed config.
 +// Used by the CLI path (after global viper load) and by Start() (after an
-+// isolated viper.New() load) so concurrent in-process Starts do not share
-+// config state.
++// isolated in-memory viper.New() load) so concurrent in-process Starts do not
++// share config state.
 +func runClientWithConfig(config clientConfig) {
  	c, err := client.NewReconnectableClient(
  		config.Config,
@@ -176,10 +176,15 @@ index db45052..ca802c1 100644
  	defer conn.Close()
  
 diff --git a/app/cmd/root.go b/app/cmd/root.go
-index 13f9705..cf929c3 100644
+index 13f9705..8c13bf0 100644
 --- a/app/cmd/root.go
 +++ b/app/cmd/root.go
-@@ -5,6 +5,7 @@ import (
+@@ -1,10 +1,12 @@
+ package cmd
+ 
+ import (
++	"bytes"
+ 	"fmt"
  	"os"
  	"strconv"
  	"strings"
@@ -187,7 +192,7 @@ index 13f9705..cf929c3 100644
  
  	"github.com/spf13/cobra"
  	"github.com/spf13/viper"
-@@ -105,6 +106,53 @@ func Execute() {
+@@ -105,6 +107,54 @@ func Execute() {
  	}
  }
  
@@ -196,24 +201,25 @@ index 13f9705..cf929c3 100644
 +// process-global viper singleton — each uses viper.New() below.
 +var startLoggerOnce sync.Once
 +
-+// Start loads configPath with an isolated viper instance and runs the client.
++// Start parses YAML config from memory and runs the client.
 +// Unlike Execute(), this is safe for concurrent in-process Hysteria clients
 +// (gfvpn-client probe pool): each Start gets its own config parse, so parallel
-+// probes cannot clobber each other's server/listen settings.
-+func Start(configPath string) {
++// probes cannot clobber each other's server/listen settings. The YAML is never
++// written to disk (server URI, auth, SNI stay in-process).
++func Start(yamlConfig []byte) {
 +	disableUpdateCheck = true
 +	startLoggerOnce.Do(initLogger)
 +
-+	if configPath == "" {
++	if len(yamlConfig) == 0 {
 +		if logger != nil {
-+			logger.Error("Start: config path is empty")
++			logger.Error("Start: config is empty")
 +		}
 +		return
 +	}
 +
 +	v := viper.New()
-+	v.SetConfigFile(configPath)
-+	if err := v.ReadInConfig(); err != nil {
++	v.SetConfigType("yaml")
++	if err := v.ReadConfig(bytes.NewReader(yamlConfig)); err != nil {
 +		if logger != nil {
 +			logger.Error("failed to read client config", zap.Error(err))
 +		}
@@ -241,7 +247,7 @@ index 13f9705..cf929c3 100644
  func init() {
  	initFlags()
  	cobra.MousetrapHelpText = "" // Disable the mousetrap so Windows users can run the exe directly by double-clicking
-@@ -136,12 +184,12 @@ func initLogger() {
+@@ -136,12 +186,12 @@ func initLogger() {
  	level, ok := logLevelMap[strings.ToLower(logLevel)]
  	if !ok {
  		fmt.Printf("unsupported log level: %s\n", logLevel)
@@ -256,7 +262,7 @@ index 13f9705..cf929c3 100644
  	}
  	c := zap.Config{
  		Level:             zap.NewAtomicLevelAt(level),
-@@ -156,7 +204,7 @@ func initLogger() {
+@@ -156,7 +206,7 @@ func initLogger() {
  	logger, err = c.Build()
  	if err != nil {
  		fmt.Printf("failed to initialize logger: %s\n", err)
