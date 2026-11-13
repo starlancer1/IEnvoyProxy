@@ -637,8 +637,58 @@ index 70195aa..a53691f 100644
  			Address:        simplifiedServer.Address,
  			UdpEnabled:     simplifiedServer.UdpEnabled,
  			PacketEncoding: simplifiedServer.PacketEncoding,
+diff --git a/transport/internet/gfvpn_request_header.go b/transport/internet/gfvpn_request_header.go
+new file mode 100644
+index 0000000..c2d9534
+--- /dev/null
++++ b/transport/internet/gfvpn_request_header.go
+@@ -0,0 +1,44 @@
++package internet
++
++import (
++	"net/http"
++	"sync/atomic"
++)
++
++// #GFVPN: one extra request header for the HTTP-based client transports
++// (websocket upgrade request, http/2 request).
++//
++// The value is asked for on every outgoing request instead of being fixed in
++// the outbound config, so a long-running outbound sends a current value on
++// each new stream.
++
++type extraRequestHeader struct {
++	name  string
++	value func() string
++}
++
++var extraHeader atomic.Pointer[extraRequestHeader]
++
++// SetExtraRequestHeader makes the websocket and http/2 client transports add
++// header name to every request, with the value returned by value. An empty
++// value sends no header. An empty name or a nil value removes the setting.
++// It is process-wide: all outbounds share it.
++func SetExtraRequestHeader(name string, value func() string) {
++	if name == "" || value == nil {
++		extraHeader.Store(nil)
++		return
++	}
++	extraHeader.Store(&extraRequestHeader{name: name, value: value})
++}
++
++// ApplyExtraRequestHeader sets the header configured with
++// SetExtraRequestHeader on h. No-op if none is configured.
++func ApplyExtraRequestHeader(h http.Header) {
++	e := extraHeader.Load()
++	if e == nil || h == nil {
++		return
++	}
++	if v := e.value(); v != "" {
++		h.Set(e.name, v)
++	}
++}
 diff --git a/transport/internet/http/dialer.go b/transport/internet/http/dialer.go
-index 8a9da0e..c957e40 100644
+index 8a9da0e..55464d3 100644
 --- a/transport/internet/http/dialer.go
 +++ b/transport/internet/http/dialer.go
 @@ -59,6 +59,23 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se
@@ -678,6 +728,14 @@ index 8a9da0e..c957e40 100644
  			if err != nil {
  				return nil, err
  			}
+@@ -123,6 +144,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+ 			httpHeaders.Set(httpHeader.Name, httpHeaderValue)
+ 		}
+ 	}
++	internet.ApplyExtraRequestHeader(httpHeaders) // #GFVPN
+ 
+ 	request := &http.Request{
+ 		Method: httpMethod,
 diff --git a/transport/internet/system_dns_android.go b/transport/internet/system_dns_android.go
 index 9cdd42a..52851dd 100644
 --- a/transport/internet/system_dns_android.go
@@ -690,6 +748,18 @@ index 9cdd42a..52851dd 100644
 +	// GFVPN patch: do NOT override net.DefaultResolver on Android.
 +	// net.DefaultResolver = NewDNSResolver()
  }
+diff --git a/transport/internet/websocket/config.go b/transport/internet/websocket/config.go
+index 82dcf17..164999c 100644
+--- a/transport/internet/websocket/config.go
++++ b/transport/internet/websocket/config.go
+@@ -25,6 +25,7 @@ func (c *Config) GetRequestHeader() http.Header {
+ 	for _, h := range c.Header {
+ 		header.Add(h.Key, h.Value)
+ 	}
++	internet.ApplyExtraRequestHeader(header) // #GFVPN
+ 	return header
+ }
+ 
 diff --git a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
 index 3fb229f..9deea95 100644
 --- a/transport/internet/websocket/dialer.go

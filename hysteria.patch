@@ -1,16 +1,17 @@
 diff --git a/app/cmd/client.go b/app/cmd/client.go
-index 65bc7e0..0b44955 100644
+index 65bc7e0..75b06f7 100644
 --- a/app/cmd/client.go
 +++ b/app/cmd/client.go
-@@ -14,6 +14,7 @@ import (
+@@ -14,6 +14,8 @@ import (
  	"slices"
  	"strconv"
  	"strings"
 +	"sync"
++	"sync/atomic"
  	"syscall"
  	"time"
  
-@@ -39,7 +40,9 @@ import (
+@@ -39,7 +41,9 @@ import (
  
  // Client flags
  var (
@@ -21,7 +22,7 @@ index 65bc7e0..0b44955 100644
  )
  
  var clientCmd = &cobra.Command{
-@@ -227,12 +230,18 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
+@@ -227,12 +231,18 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
  	case "", "udp":
  		if hyConfig.ServerAddr.Network() == "udphop" {
  			hopAddr := hyConfig.ServerAddr.(*udphop.UDPHopAddr)
@@ -42,7 +43,36 @@ index 65bc7e0..0b44955 100644
  			}
  		}
  	default:
-@@ -445,13 +454,22 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -259,8 +269,28 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
+ 	return nil
+ }
+ 
++// #GFVPN: optional suffix appended to the auth string of every client.
++//
++// fillAuth runs on each connect and reconnect, so the suffix is asked for
++// again every time instead of being fixed in the config.
++var authSuffix atomic.Pointer[func() string]
++
++// SetAuthSuffix makes every client append the string returned by suffix to
++// its configured auth string when it authenticates. nil removes the setting.
++// It is process-wide: all clients share it.
++func SetAuthSuffix(suffix func() string) {
++	if suffix == nil {
++		authSuffix.Store(nil)
++		return
++	}
++	authSuffix.Store(&suffix)
++}
++
+ func (c *clientConfig) fillAuth(hyConfig *client.Config) error {
+ 	hyConfig.Auth = c.Auth
++	if f := authSuffix.Load(); f != nil { // #GFVPN
++		hyConfig.Auth += (*f)()
++	}
+ 	return nil
+ }
+ 
+@@ -445,13 +475,22 @@ func runClient(cmd *cobra.Command, args []string) {
  	logger.Info("client mode")
  
  	if err := viper.ReadInConfig(); err != nil {
@@ -67,7 +97,7 @@ index 65bc7e0..0b44955 100644
  	c, err := client.NewReconnectableClient(
  		config.Config,
  		func(c client.Client, info *client.HandshakeInfo, count int) {
-@@ -465,7 +483,8 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -465,7 +504,8 @@ func runClient(cmd *cobra.Command, args []string) {
  			}
  		}, config.Lazy)
  	if err != nil {
@@ -77,7 +107,7 @@ index 65bc7e0..0b44955 100644
  	}
  	defer c.Close()
  
-@@ -536,14 +555,35 @@ func runClient(cmd *cobra.Command, args []string) {
+@@ -536,14 +576,35 @@ func runClient(cmd *cobra.Command, args []string) {
  		} else {
  			_ = c.Close() // Close the client here as Fatal will exit the program without running defer
  			if r.Err != nil {
@@ -115,7 +145,7 @@ index 65bc7e0..0b44955 100644
  type clientModeRunner struct {
  	ModeMap map[string]func() error
  }
-@@ -612,6 +652,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
+@@ -612,6 +673,15 @@ func clientSOCKS5(config socks5Config, c client.Client) error {
  		EventLogger: &socks5Logger{},
  	}
  	logger.Info("SOCKS5 server listening", zap.String("addr", config.Listen))
