@@ -1,6 +1,6 @@
 diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 --- a/core/domain2ip.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/core/domain2ip.go	2026-07-11 05:11:07.775655570 +0000
++++ b/core/domain2ip.go	2026-07-24 09:44:56.396989568 +0000
 @@ -0,0 +1,40 @@
 +package core
 +
@@ -44,7 +44,7 @@ diff -Naur a/core/domain2ip.go b/core/domain2ip.go
 +}
 diff -Naur a/envoy/xray.go b/envoy/xray.go
 --- a/envoy/xray.go	1970-01-01 00:00:00.000000000 +0000
-+++ b/envoy/xray.go	2026-07-21 02:51:08.319962412 +0000
++++ b/envoy/xray.go	2026-09-01 13:22:05.132112889 +0000
 @@ -0,0 +1,290 @@
 +package xray
 +
@@ -337,8 +337,8 @@ diff -Naur a/envoy/xray.go b/envoy/xray.go
 +	})
 +}
 diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
---- a/proxy/wireguard/tun.go	2026-06-19 08:15:14.931779148 +0000
-+++ b/proxy/wireguard/tun.go	2026-07-11 05:11:07.775655570 +0000
+--- a/proxy/wireguard/tun.go	2026-11-12 19:40:19.125502623 +0000
++++ b/proxy/wireguard/tun.go	2026-07-24 09:44:56.396989568 +0000
 @@ -194,7 +194,7 @@
  					Timeout: 15 * time.Second,
  				})
@@ -348,9 +348,20 @@ diff -Naur a/proxy/wireguard/tun.go b/proxy/wireguard/tun.go
  			}(r)
  		})
  		stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+diff -Naur a/transport/internet/splithttp/config.go b/transport/internet/splithttp/config.go
+--- a/transport/internet/splithttp/config.go	2026-11-12 19:40:19.137503080 +0000
++++ b/transport/internet/splithttp/config.go	2026-11-13 00:20:54.025966061 +0000
+@@ -48,6 +48,7 @@
+ 	for k, v := range c.Headers {
+ 		header.Add(k, v)
+ 	}
++	applyExtraRequestHeader(header) // #GFVPN
+ 
+ 	u, _ := url.Parse(rawURL)
+ 	// https://www.rfc-editor.org/rfc/rfc7541.html#appendix-B
 diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
---- a/transport/internet/splithttp/dialer.go	2026-06-19 08:15:14.939779235 +0000
-+++ b/transport/internet/splithttp/dialer.go	2026-07-11 05:11:07.775655570 +0000
+--- a/transport/internet/splithttp/dialer.go	2026-11-12 19:40:19.137503080 +0000
++++ b/transport/internet/splithttp/dialer.go	2026-07-24 09:44:56.396989568 +0000
 @@ -21,6 +21,7 @@
  	"github.com/xtls/xray-core/common/net"
  	"github.com/xtls/xray-core/common/signal/done"
@@ -459,9 +470,54 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		}
  		requestURL2.Path = config2.GetNormalizedPath() + sessionIdUuid.String()
  		requestURL2.RawQuery = config2.GetNormalizedQuery()
+diff -Naur a/transport/internet/splithttp/gfvpn_request_header.go b/transport/internet/splithttp/gfvpn_request_header.go
+--- a/transport/internet/splithttp/gfvpn_request_header.go	1970-01-01 00:00:00.000000000 +0000
++++ b/transport/internet/splithttp/gfvpn_request_header.go	2026-11-13 14:57:14.500056604 +0000
+@@ -0,0 +1,41 @@
++package splithttp
++
++import (
++	"net/http"
++	"sync/atomic"
++)
++
++// #GFVPN: one extra request header for the XHTTP client.
++//
++// The value is asked for on every outgoing request instead of being fixed in
++// xhttpSettings.headers, so a long-running outbound sends a current value on
++// each new stream.
++
++type extraRequestHeader struct {
++	name  string
++	value func() string
++}
++
++var extraHeader atomic.Pointer[extraRequestHeader]
++
++// SetExtraRequestHeader makes the XHTTP client add header name to every
++// request, with the value returned by value. An empty value sends no header.
++// An empty name or a nil value removes the setting. It is process-wide: all
++// outbounds share it.
++func SetExtraRequestHeader(name string, value func() string) {
++	if name == "" || value == nil {
++		extraHeader.Store(nil)
++		return
++	}
++	extraHeader.Store(&extraRequestHeader{name: name, value: value})
++}
++
++func applyExtraRequestHeader(h http.Header) {
++	e := extraHeader.Load()
++	if e == nil {
++		return
++	}
++	if v := e.value(); v != "" {
++		h.Set(e.name, v)
++	}
++}
 diff -Naur a/transport/internet/websocket/dialer.go b/transport/internet/websocket/dialer.go
---- a/transport/internet/websocket/dialer.go	2026-06-19 08:15:14.943779278 +0000
-+++ b/transport/internet/websocket/dialer.go	2026-07-11 05:11:07.779655649 +0000
+--- a/transport/internet/websocket/dialer.go	2026-11-12 19:40:19.137503080 +0000
++++ b/transport/internet/websocket/dialer.go	2026-07-24 09:44:56.396989568 +0000
 @@ -53,7 +53,7 @@
  		},
  		ReadBufferSize:   4 * 1024,

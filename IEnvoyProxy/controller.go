@@ -20,7 +20,9 @@ import (
 	hysteria2 "github.com/apernet/hysteria/app/v2/cmd"
 	ndns "github.com/ncruces/go-dns"
 	v2ray "github.com/v2fly/v2ray-core/v5/envoy"
+	v2rayinternet "github.com/v2fly/v2ray-core/v5/transport/internet"
 	xray "github.com/xtls/xray-core/envoy"
+	xraysplithttp "github.com/xtls/xray-core/transport/internet/splithttp"
 	"gitlab.com/stevenmcdonald/tubesocks"
 	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
 	ptlog "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/common/log"
@@ -1135,6 +1137,22 @@ func SnowflakeVersion() string {
 //goland:noinspection GoUnusedExportedFunction
 func LyrebirdVersion() string {
 	return "lyrebird-0.6.0"
+}
+
+// SetNativeRequestHeader makes the V2Ray websocket, V2Ray HTTP/2 and XRay
+// XHTTP transports add header name to every request they send to the server,
+// with the value returned by value at that moment. An empty value sends no
+// header; an empty name or nil value removes the setting. Process-wide.
+func SetNativeRequestHeader(name string, value func() string) {
+	v2rayinternet.SetExtraRequestHeader(name, value)
+	xraysplithttp.SetExtraRequestHeader(name, value)
+}
+
+// SetHysteria2AuthSuffix makes every Hysteria2 client append the string
+// returned by suffix to its auth string each time it connects or reconnects.
+// nil removes the setting. Process-wide.
+func SetHysteria2AuthSuffix(suffix func() string) {
+	hysteria2.SetAuthSuffix(suffix)
 }
 
 // SetDOHServer - set the default Go resolver to use DNS over HTTPS with our
