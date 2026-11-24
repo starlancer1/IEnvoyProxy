@@ -1148,6 +1148,17 @@ func SetNativeRequestHeader(name string, value func() string) {
 	xraysplithttp.SetExtraRequestHeader(name, value)
 }
 
+// SetHTTP2ReceiveWindows sets the HTTP/2 receive windows, in bytes, of the
+// V2Ray HTTP/2 and XRay XHTTP (h2) transports started afterwards: how much
+// data the server may send on one stream, and on one connection, before the
+// client has read it. That data is held on the heap, 4 MB per stream by
+// default. perConnection must be at least 64 KB and both below 4 MB. Zero for
+// both restores the defaults. Process-wide.
+func SetHTTP2ReceiveWindows(perStream, perConnection int) {
+	v2rayinternet.SetHTTP2ReceiveWindows(perStream, perConnection)
+	xraysplithttp.SetHTTP2ReceiveWindows(perStream, perConnection)
+}
+
 // SetHysteria2AuthSuffix makes every Hysteria2 client append the string
 // returned by suffix to its auth string each time it connects or reconnects.
 // nil removes the setting. Process-wide.
