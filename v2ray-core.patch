@@ -637,6 +637,78 @@ index 70195aa..a53691f 100644
  			Address:        simplifiedServer.Address,
  			UdpEnabled:     simplifiedServer.UdpEnabled,
  			PacketEncoding: simplifiedServer.PacketEncoding,
+diff --git a/transport/internet/gfvpn_http2_recvwindow.go b/transport/internet/gfvpn_http2_recvwindow.go
+new file mode 100644
+index 0000000..fde86e9
+--- /dev/null
++++ b/transport/internet/gfvpn_http2_recvwindow.go
+@@ -0,0 +1,66 @@
++package internet
++
++import (
++	"net/http"
++	"sync/atomic"
++
++	"golang.org/x/net/http2"
++)
++
++// #GFVPN: receive windows of the http/2 client transport.
++//
++// The receive window is how much data the server may send on a stream (or on
++// the whole connection) before the client has read it. The client keeps that
++// data on the heap. x/net/http2 uses 4 MB per stream and 1 GB per connection,
++// so every stream whose reader is slower than the network holds up to 4 MB.
++// That does not fit a process with a small memory budget (iOS Network
++// Extension).
++
++type http2ReceiveWindows struct {
++	perStream     int
++	perConnection int
++}
++
++var http2Windows atomic.Pointer[http2ReceiveWindows]
++
++// SetHTTP2ReceiveWindows sets the receive windows, in bytes, of every http/2
++// client transport created afterwards. perConnection must be at least 64 KB
++// and both must be below 4 MB; x/net/http2 replaces a value outside that range
++// with its default. Zero for both restores the x/net/http2 defaults.
++// It is process-wide: all outbounds share it.
++func SetHTTP2ReceiveWindows(perStream, perConnection int) {
++	if perStream <= 0 && perConnection <= 0 {
++		http2Windows.Store(nil)
++		return
++	}
++	http2Windows.Store(&http2ReceiveWindows{perStream: perStream, perConnection: perConnection})
++}
++
++// NewHTTP2Transport returns an http/2 client transport with the windows set
++// by SetHTTP2ReceiveWindows, and otherwise with zero values like
++// &http2.Transport{}. The caller sets DialTLSContext and whatever else it
++// needs.
++func NewHTTP2Transport() *http2.Transport {
++	w := http2Windows.Load()
++	if w == nil {
++		return &http2.Transport{}
++	}
++	// http2.Transport has no fields for its receive windows. It takes them
++	// from the net/http transport it was configured on (http.Transport.HTTP2),
++	// so one is created only to carry them.
++	carrier := &http.Transport{
++		HTTP2: &http.HTTP2Config{
++			MaxReceiveBufferPerStream:     w.perStream,
++			MaxReceiveBufferPerConnection: w.perConnection,
++		},
++	}
++	transport, err := http2.ConfigureTransports(carrier)
++	if err != nil {
++		return &http2.Transport{}
++	}
++	// ConfigureTransports gives the transport a pool that only holds
++	// connections dialled by carrier. Callers use the transport directly, so
++	// it needs the default pool, which dials with DialTLSContext.
++	transport.ConnPool = nil
++	return transport
++}
 diff --git a/transport/internet/gfvpn_request_header.go b/transport/internet/gfvpn_request_header.go
 new file mode 100644
 index 0000000..c2d9534
@@ -688,7 +760,7 @@ index 0000000..c2d9534
 +	}
 +}
 diff --git a/transport/internet/http/dialer.go b/transport/internet/http/dialer.go
-index 8a9da0e..55464d3 100644
+index 8a9da0e..f7ab645 100644
 --- a/transport/internet/http/dialer.go
 +++ b/transport/internet/http/dialer.go
 @@ -59,6 +59,23 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se
@@ -728,7 +800,19 @@ index 8a9da0e..55464d3 100644
  			if err != nil {
  				return nil, err
  			}
-@@ -123,6 +144,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+@@ -86,6 +107,11 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se
+ 			return cn, nil
+ 		},
+ 	}
++	// #GFVPN: same transport, with the receive windows set by
++	// internet.SetHTTP2ReceiveWindows (none set: x/net/http2 defaults).
++	dialTLS := transport.DialTLSContext
++	transport = internet.NewHTTP2Transport()
++	transport.DialTLSContext = dialTLS
+ 
+ 	client := &http.Client{
+ 		Transport: transport,
+@@ -123,6 +149,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
  			httpHeaders.Set(httpHeader.Name, httpHeaderValue)
  		}
  	}

@@ -360,9 +360,9 @@ diff -Naur a/transport/internet/splithttp/config.go b/transport/internet/splitht
  	u, _ := url.Parse(rawURL)
  	// https://www.rfc-editor.org/rfc/rfc7541.html#appendix-B
 diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
---- a/transport/internet/splithttp/dialer.go	2026-11-12 19:40:19.137503080 +0000
-+++ b/transport/internet/splithttp/dialer.go	2026-07-24 09:44:56.396989568 +0000
-@@ -21,6 +21,7 @@
+--- a/transport/internet/splithttp/dialer.go	2026-06-19 08:15:14.939779235 +0000
++++ b/transport/internet/splithttp/dialer.go	2026-11-19 15:12:58.343308300 +0000
+@@ -21,13 +21,13 @@
  	"github.com/xtls/xray-core/common/net"
  	"github.com/xtls/xray-core/common/signal/done"
  	"github.com/xtls/xray-core/common/uuid"
@@ -370,7 +370,14 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  	"github.com/xtls/xray-core/transport/internet"
  	"github.com/xtls/xray-core/transport/internet/browser_dialer"
  	"github.com/xtls/xray-core/transport/internet/reality"
-@@ -117,6 +118,9 @@
+ 	"github.com/xtls/xray-core/transport/internet/stat"
+ 	"github.com/xtls/xray-core/transport/internet/tls"
+ 	"github.com/xtls/xray-core/transport/pipe"
+-	"golang.org/x/net/http2"
+ )
+ 
+ type dialerConf struct {
+@@ -117,6 +117,9 @@
  			return nil, err
  		}
  
@@ -380,7 +387,7 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		if realityConfig != nil {
  			return reality.UClient(conn, realityConfig, ctxInner, dest)
  		}
-@@ -161,8 +165,8 @@
+@@ -161,8 +164,8 @@
  		transport = &http3.Transport{
  			QUICConfig:      quicConfig,
  			TLSClientConfig: gotlsConfig,
@@ -391,7 +398,7 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  				if err != nil {
  					return nil, err
  				}
-@@ -195,7 +199,10 @@
+@@ -195,7 +198,10 @@
  					}
  				}
  
@@ -403,7 +410,29 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  			},
  		}
  	} else if httpVersion == "2" {
-@@ -253,6 +260,23 @@
+@@ -205,13 +211,15 @@
+ 		if keepAlivePeriod < 0 {
+ 			keepAlivePeriod = 0
+ 		}
+-		transport = &http2.Transport{
+-			DialTLSContext: func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
+-				return dialContext(ctxInner)
+-			},
+-			IdleConnTimeout: net.ConnIdleTimeout,
+-			ReadIdleTimeout: keepAlivePeriod,
++		// #GFVPN: &http2.Transport{} with the receive windows set by
++		// SetHTTP2ReceiveWindows (none set: x/net/http2 defaults).
++		h2Transport := NewHTTP2Transport()
++		h2Transport.DialTLSContext = func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++			return dialContext(ctxInner)
+ 		}
++		h2Transport.IdleConnTimeout = net.ConnIdleTimeout
++		h2Transport.ReadIdleTimeout = keepAlivePeriod
++		transport = h2Transport
+ 	} else {
+ 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
+ 			return dialContext(ctxInner)
+@@ -253,6 +261,23 @@
  		dest.Network = net.Network_UDP
  	}
  
@@ -427,7 +456,7 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  	transportConfiguration := streamSettings.ProtocolSettings.(*Config)
  	var requestURL url.URL
  
-@@ -269,7 +293,7 @@
+@@ -269,7 +294,7 @@
  		requestURL.Host = realityConfig.ServerName
  	}
  	if requestURL.Host == "" {
@@ -436,7 +465,7 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  	}
  
  	sessionIdUuid := uuid.New()
-@@ -311,6 +335,24 @@
+@@ -311,6 +336,24 @@
  		if httpVersion2 == "3" {
  			dest2.Network = net.Network_UDP
  		}
@@ -461,7 +490,7 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		if tlsConfig2 != nil || realityConfig2 != nil {
  			requestURL2.Scheme = "https"
  		} else {
-@@ -325,7 +367,7 @@
+@@ -325,7 +368,7 @@
  			requestURL2.Host = realityConfig2.ServerName
  		}
  		if requestURL2.Host == "" {
@@ -470,6 +499,76 @@ diff -Naur a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  		}
  		requestURL2.Path = config2.GetNormalizedPath() + sessionIdUuid.String()
  		requestURL2.RawQuery = config2.GetNormalizedQuery()
+diff -Naur a/transport/internet/splithttp/gfvpn_http2_recvwindow.go b/transport/internet/splithttp/gfvpn_http2_recvwindow.go
+--- a/transport/internet/splithttp/gfvpn_http2_recvwindow.go	1970-01-01 00:00:00.000000000 +0000
++++ b/transport/internet/splithttp/gfvpn_http2_recvwindow.go	2026-11-19 15:12:06.373777539 +0000
+@@ -0,0 +1,66 @@
++package splithttp
++
++import (
++	"net/http"
++	"sync/atomic"
++
++	"golang.org/x/net/http2"
++)
++
++// #GFVPN: receive windows of the http/2 client transport (XHTTP over h2).
++//
++// The receive window is how much data the server may send on a stream (or on
++// the whole connection) before the client has read it. The client keeps that
++// data on the heap. x/net/http2 uses 4 MB per stream and 1 GB per connection,
++// so every stream whose reader is slower than the network holds up to 4 MB.
++// That does not fit a process with a small memory budget (iOS Network
++// Extension).
++
++type http2ReceiveWindows struct {
++	perStream     int
++	perConnection int
++}
++
++var http2Windows atomic.Pointer[http2ReceiveWindows]
++
++// SetHTTP2ReceiveWindows sets the receive windows, in bytes, of every http/2
++// client transport created afterwards. perConnection must be at least 64 KB
++// and both must be below 4 MB; x/net/http2 replaces a value outside that range
++// with its default. Zero for both restores the x/net/http2 defaults.
++// It is process-wide: all outbounds share it.
++func SetHTTP2ReceiveWindows(perStream, perConnection int) {
++	if perStream <= 0 && perConnection <= 0 {
++		http2Windows.Store(nil)
++		return
++	}
++	http2Windows.Store(&http2ReceiveWindows{perStream: perStream, perConnection: perConnection})
++}
++
++// NewHTTP2Transport returns an http/2 client transport with the windows set
++// by SetHTTP2ReceiveWindows, and otherwise with zero values like
++// &http2.Transport{}. The caller sets DialTLSContext and whatever else it
++// needs.
++func NewHTTP2Transport() *http2.Transport {
++	w := http2Windows.Load()
++	if w == nil {
++		return &http2.Transport{}
++	}
++	// http2.Transport has no fields for its receive windows. It takes them
++	// from the net/http transport it was configured on (http.Transport.HTTP2),
++	// so one is created only to carry them.
++	carrier := &http.Transport{
++		HTTP2: &http.HTTP2Config{
++			MaxReceiveBufferPerStream:     w.perStream,
++			MaxReceiveBufferPerConnection: w.perConnection,
++		},
++	}
++	transport, err := http2.ConfigureTransports(carrier)
++	if err != nil {
++		return &http2.Transport{}
++	}
++	// ConfigureTransports gives the transport a pool that only holds
++	// connections dialled by carrier. Callers use the transport directly, so
++	// it needs the default pool, which dials with DialTLSContext.
++	transport.ConnPool = nil
++	return transport
++}
 diff -Naur a/transport/internet/splithttp/gfvpn_request_header.go b/transport/internet/splithttp/gfvpn_request_header.go
 --- a/transport/internet/splithttp/gfvpn_request_header.go	1970-01-01 00:00:00.000000000 +0000
 +++ b/transport/internet/splithttp/gfvpn_request_header.go	2026-11-13 14:57:14.500056604 +0000
